@@ -1,0 +1,29 @@
+name: Test
+# disable as swtpm does not work at github images
+ on:
+  push:
+    branches:
+#      - main
+  pull_request:
+    branches:
+#      - main
+jobs:
+  test:
+    strategy:
+      matrix:
+        go-version: [1.15]
+        os: [ubuntu-20.04]
+    runs-on: ${{ matrix.os }}
+    steps:
+    - name: Install Go
+      uses: actions/setup-go@v2
+      with:
+        go-version: ${{ matrix.go-version }}
+    - name: Checkout code
+      uses: actions/checkout@v2
+    - name: Setup extra repos
+      run: sudo add-apt-repository ppa:stefanberger/swtpm-focal && sudo apt-get update
+    - name: Install dependencies
+      run: sudo apt-get install clevis tang swtpm swtpm-tools tpm2-tools
+    - name: Test
+      run: go test -v

@@ -1,0 +1,209 @@
+#!/bin/bash -e
+# vim: set tabstop=8 shiftwidth=4 softtabstop=4 expandtab smarttab colorcolumn=80:
+#
+# Copyright (c) 2017 Red Hat, Inc.
+# Author: Javier Martinez Canillas <javierm@redhat.com>
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#
+
+SUMMARY="Encrypts using a TPM2.0 chip binding policy"
+# The owner hierarchy is the one that should be used by the Operating System.
+auth="o"
+# Algorithm type must be keyedhash for object with user provided sensitive data.
+alg_create_key="keyedhash"
+# Attributes for the created TPM2 object with the JWK as sensitive data.
+obj_attr="fixedtpm|fixedparent|noda|adminwithpolicy"
+
+function on_exit() {
+    if [ ! -d "$TMP" ] || ! rm -rf "$TMP"; then
+        echo "Delete temporary files failed!" >&2
+        echo "You need to clean up: $TMP" >&2
+        exit 1
+    fi
+}
+
+if [ "$1" == "--summary" ]; then
+    echo "$SUMMARY"
+    exit 0
+fi
+
+if [ -t 0 ]; then
+    exec >&2
+    echo
+    echo "Usage: clevis encrypt tpm2 CONFIG < PLAINTEXT > JWE"
+    echo
+    echo "$SUMMARY"
+    echo
+    echo "This command uses the following configuration properties:"
+    echo
+    echo "  hash: <string>  Hash algorithm used in the computation of the object name (default: sha256)"
+    echo
+    echo "  key: <string>   Algorithm type for the generated key (default: ecc)"
+    echo
+    echo "  pcr_bank: <string>   PCR algorithm bank to use for policy (default: sha1)"
+    echo
+    echo "  pcr_ids: <string>   PCR list used for policy. If not present, no policy is used"
+    echo
+    echo "  pcr_digest: <string>   Binary PCR hashes encoded in base64. If not present, the hash values are looked up"
+    echo
+    exit 2
+fi
+
+TPM2TOOLS_INFO="$(tpm2_createprimary -v)"
+
+match='version="(.)\.'
+[[ $TPM2TOOLS_INFO =~ $match ]] && TPM2TOOLS_VERSION="${BASH_REMATCH[1]}"
+if [[ $TPM2TOOLS_VERSION -lt 3 ]] || [[ $TPM2TOOLS_VERSION -gt 5 ]]; then
+    echo "The tpm2 pin requires a tpm2-tools version between 3 and 5" >&2
+    exit 1
+fi
+
+if ! cfg="$(jose fmt -j "$1" -Oo- 2>/dev/null)"; then
+    echo "Configuration is malformed!" >&2
+    exit 1
+fi
+
+hash="$(jose fmt -j- -Og hash -u- <<< "$cfg")" || hash="sha256"
+
+key="$(jose fmt -j- -Og key -u- <<< "$cfg")" || key="ecc"
+
+pcr_bank="$(jose fmt -j- -Og pcr_bank -u- <<< "$cfg")" || pcr_bank="sha1"
+
+# Trim the spaces from the config, so that we will not have issues parsing
+# the PCR IDs.
+pcr_cfg=${cfg//[[:space:]]/}
+# Issue #103: We support passing pcr_ids using both a single string, as in
+# "1,3", as well as an actual JSON array, such as ["1","3"]. Let's handle both
+# cases here.
+if jose fmt -j- -Og pcr_ids 2>/dev/null <<< "${pcr_cfg}" \
+    && ! pcr_ids="$(jose fmt -j- -Og pcr_ids -u- 2>/dev/null \
+                    <<< "${pcr_cfg}")"; then
+
+    # We failed to parse a string, so let's try to parse a JSON array instead.
+    if jose fmt -j- -Og pcr_ids -A 2>/dev/null <<< "${pcr_cfg}"; then
+        # OK, it is an array, so let's get the items and form a string.
+        pcr_ids=
+        for pcr in $(jose fmt -j- -Og pcr_ids -Af- <<< "${pcr_cfg}" \
+                     | tr -d '"'); do
+            pcr_ids=$(printf '%s,%s' "${pcr_ids}" "${pcr}")
+        done
+        # Now let's remove the leading comma.
+        pcr_ids=${pcr_ids/#,/}
+    else
+        # Not to add a policy that was not intended, in this case, no policy
+        # at all, let's report the issue and exit.
+        echo "Parsing the requested policy failed!" >&2
+        exit 1
+    fi
+fi
+
+pcr_digest="$(jose fmt -j- -Og pcr_digest -u- <<< "$cfg")" || true
+
+if ! jwk="$(jose jwk gen -i '{"alg":"A256GCM"}')"; then
+    echo "Generating a jwk failed!" >&2
+    exit 1
+fi
+
+if ! TMP="$(mktemp -d)"; then
+    echo "Creating a temporary dir for TPM files failed!" >&2
+    exit 1
+fi
+
+trap 'on_exit' EXIT
+
+case "$TPM2TOOLS_VERSION" in
+    3) tpm2_createprimary -Q -H "$auth" -g "$hash" -G "$key" -C "$TMP"/primary.context || fail=$?;;
+    4|5) tpm2_createprimary -Q -C "$auth" -g "$hash" -G "$key" -c "$TMP"/primary.context || fail=$?;;
+    *) fail=1;;
+esac
+if [ -n "$fail" ]; then
+    echo "Creating TPM2 primary key failed!" >&2
+    exit 1
+fi
+
+policy_options=()
+if [ -n "$pcr_ids" ]; then
+    if [ -z "$pcr_digest" ]; then
+        case "$TPM2TOOLS_VERSION" in
+            3) tpm2_pcrlist -Q -L "$pcr_bank":"$pcr_ids" -o "$TMP"/pcr.digest || fail=$?;;
+            4|5) tpm2_pcrread -Q "$pcr_bank":"$pcr_ids" -o "$TMP"/pcr.digest || fail=$?;;
+            *) fail=1;;
+        esac
+        if [ -n "$fail" ]; then
+            echo "Creating PCR hashes file failed!" >&2
+            exit 1
+        fi
+    else
+        if ! jose b64 dec -i- -O "$TMP"/pcr.digest <<< "$pcr_digest"; then
+            echo "Error decoding PCR digest!" >&2
+            exit 1
+        fi
+    fi
+
+    case "$TPM2TOOLS_VERSION" in
+        3) tpm2_createpolicy -Q -g "$hash" -P -L "$pcr_bank":"$pcr_ids" \
+                             -F "$TMP"/pcr.digest -f "$TMP"/pcr.policy || fail=$?;;
+        4|5) tpm2_createpolicy -Q -g "$hash" --policy-pcr -l "$pcr_bank":"$pcr_ids" \
+                               -f "$TMP"/pcr.digest -L "$TMP"/pcr.policy || fail=$?;;
+        *) fail=1;;
+    esac
+    if [ -n "$fail" ]; then
+        echo "create policy fail, please check the environment or parameters!"
+        exit 1
+    fi
+
+    policy_options+=(-L "$TMP/pcr.policy")
+else
+    obj_attr="$obj_attr|userwithauth"
+fi
+
+case "$TPM2TOOLS_VERSION" in
+    3) tpm2_create -Q -g "$hash" -G "$alg_create_key" -c "$TMP"/primary.context -u "$TMP"/jwk.pub \
+                   -r "$TMP"/jwk.priv -A "$obj_attr" "${policy_options[@]}" -I- <<< "$jwk" || fail=$?;;
+    4|5) tpm2_create -Q -g "$hash" -C "$TMP"/primary.context -u "$TMP"/jwk.pub \
+                     -r "$TMP"/jwk.priv -a "$obj_attr" "${policy_options[@]}" -i- <<< "$jwk" || fail=$?;;
+    *) fail=1;;
+esac
+if [ -n "$fail" ]; then
+    echo "Creating TPM2 object for jwk failed!" >&2
+    exit 1
+fi
+
+if ! jwk_pub="$(jose b64 enc -I "$TMP"/jwk.pub)"; then
+    echo "Encoding jwk.pub in Base64 failed!" >&2
+    exit 1
+fi
+
+if ! jwk_priv="$(jose b64 enc -I "$TMP"/jwk.priv)"; then
+    echo "Encoding jwk.priv in Base64 failed!" >&2
+    exit 1
+fi
+
+jwe='{"protected":{"clevis":{"pin":"tpm2","tpm2":{}}}}'
+jwe="$(jose fmt -j "$jwe" -g protected -g clevis -g tpm2 -q "$hash" -s hash -UUUUo-)"
+jwe="$(jose fmt -j "$jwe" -g protected -g clevis -g tpm2 -q "$key" -s key -UUUUo-)"
+
+if [ -n "$pcr_ids" ]; then
+    jwe="$(jose fmt -j "$jwe" -g protected -g clevis -g tpm2 -q "$pcr_bank" -s pcr_bank -UUUUo-)"
+    jwe="$(jose fmt -j "$jwe" -g protected -g clevis -g tpm2 -q "$pcr_ids" -s pcr_ids -UUUUo-)"
+fi
+
+jwe="$(jose fmt -j "$jwe" -g protected -g clevis -g tpm2 -q "$jwk_pub" -s jwk_pub -UUUUo-)"
+jwe="$(jose fmt -j "$jwe" -g protected -g clevis -g tpm2 -q "$jwk_priv" -s jwk_priv -UUUUo-)"
+
+jose jwe enc -i- -k- -I- -c < <(echo -n "$jwe$jwk"; /bin/cat)
+
+# we do not use a resource manager thus we have to cleanup TPM state ourselves
+tpm2_flushcontext -t
