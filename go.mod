@@ -3,10 +3,9 @@ module github.com/anatol/clevis.go
 go 1.15
 
 require (
-	github.com/google/go-tpm v0.3.1
-	github.com/kr/pretty v0.1.0 // indirect
-	github.com/lestrrat-go/jwx v1.0.6-0.20201106071353-effd74b5ba2a
+	github.com/google/go-tpm v0.3.2
+	github.com/lestrrat-go/jwx v1.0.6-0.20201216083324-90ea9b53a618
 	github.com/stretchr/testify v1.6.1 // indirect
-	golang.org/x/sys v0.0.0-20201202213521-69691e467435 // indirect
-	gopkg.in/check.v1 v1.0.0-20180628173108-788fd7840127 // indirect
+	golang.org/x/crypto v0.0.0-20201208171446-5f87f3452ae9 // indirect
+	golang.org/x/sys v0.0.0-20201214210602-f9fddec55a1e // indirect
 )
