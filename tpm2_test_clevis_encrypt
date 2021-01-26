@@ -70,6 +70,30 @@ if [[ $TPM2TOOLS_VERSION -lt 3 ]] || [[ $TPM2TOOLS_VERSION -gt 5 ]]; then
     exit 1
 fi
 
+if [ -z "$TPM2TOOLS_TCTI" ]; then
+    # Old environment variables for tpm2-tools 3.0
+    export TPM2TOOLS_TCTI_NAME=device
+    export TPM2TOOLS_DEVICE_FILE=
+    for dev in /dev/tpmrm?; do
+        [ -e "$dev" ] || continue
+        TPM2TOOLS_DEVICE_FILE="$dev"
+        break
+    done
+
+    # New environment variable for tpm2-tools >= 3.1
+    export TPM2TOOLS_TCTI="$TPM2TOOLS_TCTI_NAME:$TPM2TOOLS_DEVICE_FILE"
+
+    if [ -z "$TPM2TOOLS_DEVICE_FILE" ]; then
+        echo "A TPM2 device with the in-kernel resource manager is needed!" >&2
+        exit 1
+    fi
+
+    if ! [[ -r "$TPM2TOOLS_DEVICE_FILE" && -w "$TPM2TOOLS_DEVICE_FILE" ]]; then
+        echo "The $TPM2TOOLS_DEVICE_FILE device must be readable and writable!" >&2
+        exit 1
+    fi
+fi
+
 if ! cfg="$(jose fmt -j "$1" -Oo- 2>/dev/null)"; then
     echo "Configuration is malformed!" >&2
     exit 1
@@ -132,6 +156,7 @@ if [ -n "$fail" ]; then
     echo "Creating TPM2 primary key failed!" >&2
     exit 1
 fi
+tpm2_flushcontext -t
 
 policy_options=()
 if [ -n "$pcr_ids" ]; then
@@ -145,6 +170,7 @@ if [ -n "$pcr_ids" ]; then
             echo "Creating PCR hashes file failed!" >&2
             exit 1
         fi
+        tpm2_flushcontext -t
     else
         if ! jose b64 dec -i- -O "$TMP"/pcr.digest <<< "$pcr_digest"; then
             echo "Error decoding PCR digest!" >&2
@@ -163,6 +189,7 @@ if [ -n "$pcr_ids" ]; then
         echo "create policy fail, please check the environment or parameters!"
         exit 1
     fi
+    tpm2_flushcontext -t
 
     policy_options+=(-L "$TMP/pcr.policy")
 else
@@ -180,6 +207,7 @@ if [ -n "$fail" ]; then
     echo "Creating TPM2 object for jwk failed!" >&2
     exit 1
 fi
+tpm2_flushcontext -t
 
 if ! jwk_pub="$(jose b64 enc -I "$TMP"/jwk.pub)"; then
     echo "Encoding jwk.pub in Base64 failed!" >&2
@@ -203,7 +231,8 @@ fi
 jwe="$(jose fmt -j "$jwe" -g protected -g clevis -g tpm2 -q "$jwk_pub" -s jwk_pub -UUUUo-)"
 jwe="$(jose fmt -j "$jwe" -g protected -g clevis -g tpm2 -q "$jwk_priv" -s jwk_priv -UUUUo-)"
 
-jose jwe enc -i- -k- -I- -c < <(echo -n "$jwe$jwk"; /bin/cat)
+# The on_exit() trap will not be fired after exec, so let's clean up the temp
+# directory at this point.
+[ -d "${TMP}" ] && rm -rf "${TMP}"
 
-# we do not use a resource manager thus we have to cleanup TPM state ourselves
-tpm2_flushcontext -t
+exec jose jwe enc -i- -k- -I- -c < <(echo -n "$jwe$jwk"; /bin/cat)
