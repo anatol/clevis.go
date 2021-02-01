@@ -173,14 +173,17 @@ func DecryptTpm2(msg *jwe.Message, clevisNode map[string]interface{}) ([]byte, e
 		}
 	}
 
-	keys, err := jwk.ParseBytes(unsealed)
+	keys, err := jwk.Parse(unsealed)
 	if err != nil {
 		return nil, err
 	}
 	if keys.Len() != 1 {
 		return nil, fmt.Errorf("clevis.go/tpm2: expected to have 1 key in unsealed data, got %v", keys.Len())
 	}
-	key := keys.Keys[0]
+	key, ok := keys.Get(0)
+	if !ok {
+		return nil, fmt.Errorf("clevis.go/tpm2: unable to get a key with index 0")
+	}
 	symmKey, ok := key.(jwk.SymmetricKey)
 	if !ok {
 		return nil, fmt.Errorf("clevis.go/tpm2: unsealed key expected to be a symmetric key")
