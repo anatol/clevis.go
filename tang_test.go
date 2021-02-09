@@ -105,7 +105,6 @@ func findSigningKey(dir string) (string, error) {
 
 type TangServer struct {
 	keysDir    string
-	cacheDir   string
 	thumbprint string // default key thumbprint
 	listener   net.Listener
 	quit       chan interface{}
@@ -127,12 +126,6 @@ func NewTangServer(t *testing.T) (*TangServer, error) {
 		return nil, err
 	}
 
-	cacheDir := t.TempDir()
-	err = exec.Command(tangBinLocation+"tangd-update", keysDir, cacheDir).Run()
-	if err != nil {
-		return nil, err
-	}
-
 	var l net.Listener
 	l, err = net.Listen("tcp", ":0")
 	if err != nil {
@@ -141,7 +134,6 @@ func NewTangServer(t *testing.T) (*TangServer, error) {
 
 	s := &TangServer{
 		keysDir:    keysDir,
-		cacheDir:   cacheDir,
 		thumbprint: thumbprint,
 		listener:   l,
 		port:       l.Addr().(*net.TCPAddr).Port,
@@ -187,7 +179,7 @@ func (s *TangServer) handleConection(conn net.Conn) {
 			return
 		}
 
-		tangCmd := exec.Command(tangBinLocation+"tangd", s.cacheDir)
+		tangCmd := exec.Command(tangBinLocation+"tangd", s.keysDir)
 		tangCmd.Stdin = bytes.NewReader(buf[:n])
 		if testing.Verbose() {
 			tangCmd.Stderr = os.Stderr
