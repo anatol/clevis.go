@@ -32,7 +32,7 @@ func TestDecryptSss(t *testing.T) {
 		tangConfigs[i] = s.TangConfig()
 	}
 	sssConfig := fmt.Sprintf(`{"t":%d, "pins": {"tang": [%s]}}`, threshold, strings.Join(tangConfigs[:], ","))
-	encryptCmd := exec.Command("/usr/bin/clevis-encrypt-sss", sssConfig)
+	encryptCmd := exec.Command("clevis-encrypt-sss", sssConfig)
 	encryptCmd.Stdin = strings.NewReader(inputText)
 	var encryptedData bytes.Buffer
 	encryptCmd.Stdout = &encryptedData

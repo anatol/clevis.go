@@ -43,7 +43,7 @@ func TestDecryptTang(t *testing.T) {
 
 	// encrypt a text using 'clevis-encrypt-tang' like this:
 	// clevis-encrypt-tang '{"url":"http://localhost", "thp":"1GDW0VlDv95DwPIm5EOqZVZCMeo"}' <<< "hello"
-	encryptCmd := exec.Command("/usr/bin/clevis-encrypt-tang", s.TangConfig())
+	encryptCmd := exec.Command("clevis-encrypt-tang", s.TangConfig())
 	encryptCmd.Stdin = strings.NewReader(inputText)
 	var encryptedData bytes.Buffer
 	encryptCmd.Stdout = &encryptedData
@@ -102,7 +102,7 @@ func signingKeyThumbprint(dir string, hash crypto.Hash) (string, error) {
 			return "", fmt.Errorf("do not know how to calculate thumbprint for hash %s", hash.String())
 		}
 
-		thpCmd := exec.Command("/usr/bin/jose", "jwk", "thp", "-a", algo, "-i", dir+"/"+f.Name())
+		thpCmd := exec.Command("jose", "jwk", "thp", "-a", algo, "-i", dir+"/"+f.Name())
 		var thpOut bytes.Buffer
 		thpCmd.Stdout = &thpOut
 		if err := thpCmd.Run(); err != nil {
