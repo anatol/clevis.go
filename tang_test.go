@@ -131,14 +131,12 @@ func NewTangServer(t *testing.T) (*TangServer, error) {
 	}
 
 	// calculate thumbprint of the generated key using 'jose jwk thp -i $DBDIR/$SIG.jwk'
-	var thumbprint string
-	thumbprint, err = signingKeyThumbprint(keysDir, crypto.SHA1)
+	thumbprint, err := signingKeyThumbprint(keysDir, crypto.SHA1)
 	if err != nil {
 		return nil, err
 	}
 
-	var l net.Listener
-	l, err = net.Listen("tcp", ":0")
+	l, err := net.Listen("tcp", ":0")
 	if err != nil {
 		return nil, err
 	}
