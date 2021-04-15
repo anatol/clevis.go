@@ -8,7 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"math/big"
 	"net/http"
 
@@ -126,7 +126,7 @@ func performTangServerRequest(url string, key *ecdsa.PublicKey) (*ecdsa.PublicKe
 	}
 	defer resp.Body.Close()
 
-	respData, err := ioutil.ReadAll(resp.Body)
+	respData, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
 	}

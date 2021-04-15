@@ -5,7 +5,6 @@ import (
 	"crypto"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"net"
 	"os"
@@ -82,14 +81,14 @@ var algos = map[crypto.Hash]string{
 }
 
 func signingKeyThumbprint(dir string, hash crypto.Hash) (string, error) {
-	readDir, err := ioutil.ReadDir(dir)
+	readDir, err := os.ReadDir(dir)
 	if err != nil {
 		return "", err
 	}
 
 	for _, f := range readDir {
 		marker := `"key_ops":["sign","verify"]`
-		content, err := ioutil.ReadFile(dir + "/" + f.Name())
+		content, err := os.ReadFile(dir + "/" + f.Name())
 		if err != nil {
 			return "", err
 		}
