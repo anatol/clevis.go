@@ -30,7 +30,7 @@ func init() {
 	}
 }
 
-func TestDecryptTang(t *testing.T) {
+func checkDecryptTang(t *testing.T, h crypto.Hash) {
 	// start Tang server
 	s, err := NewTangServer(t)
 	if err != nil {
@@ -42,7 +42,11 @@ func TestDecryptTang(t *testing.T) {
 
 	// encrypt a text using 'clevis-encrypt-tang' like this:
 	// clevis-encrypt-tang '{"url":"http://localhost", "thp":"1GDW0VlDv95DwPIm5EOqZVZCMeo"}' <<< "hello"
-	encryptCmd := exec.Command("clevis-encrypt-tang", s.TangConfig())
+	config, err := s.TangConfig(h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encryptCmd := exec.Command("clevis-encrypt-tang", config)
 	encryptCmd.Stdin = strings.NewReader(inputText)
 	var encryptedData bytes.Buffer
 	encryptCmd.Stdout = &encryptedData
@@ -74,34 +78,19 @@ func TestDecryptTang(t *testing.T) {
 	}
 }
 
-// hash algorithm names for'jose jwk thp'
-var algos = map[crypto.Hash]string{
-	crypto.SHA1:   "S1",
-	crypto.SHA256: "S256",
+func TestDecryptTangSHA1(t *testing.T) {
+	checkDecryptTang(t, crypto.SHA1)
 }
 
-func signingKeyThumbprint(dir string, hash crypto.Hash) (string, error) {
-	algo, ok := algos[hash]
-	if !ok {
-		return "", fmt.Errorf("do not know how to calculate thumbprint for hash %s", hash.String())
-	}
-
-	thpCmd := exec.Command("jose", "jwk", "thp", "-a", algo, "-i", dir+"/sign.jwk")
-	var thpOut bytes.Buffer
-	thpCmd.Stdout = &thpOut
-	if err := thpCmd.Run(); err != nil {
-		return "", err
-	}
-
-	return thpOut.String(), nil
+func TestDecryptTangSHA256(t *testing.T) {
+	checkDecryptTang(t, crypto.SHA256)
 }
 
 type TangServer struct {
-	keysDir    string
-	thumbprint string // default key thumbprint
-	listener   net.Listener
-	quit       chan interface{}
-	port       int
+	keysDir  string
+	listener net.Listener
+	quit     chan interface{}
+	port     int
 }
 
 func NewTangServer(t *testing.T) (*TangServer, error) {
@@ -112,23 +101,16 @@ func NewTangServer(t *testing.T) (*TangServer, error) {
 		return nil, err
 	}
 
-	// calculate thumbprint of the generated key using 'jose jwk thp -i $DBDIR/$SIG.jwk'
-	thumbprint, err := signingKeyThumbprint(keysDir, crypto.SHA1)
-	if err != nil {
-		return nil, err
-	}
-
 	l, err := net.Listen("tcp", ":0")
 	if err != nil {
 		return nil, err
 	}
 
 	s := &TangServer{
-		keysDir:    keysDir,
-		thumbprint: thumbprint,
-		listener:   l,
-		port:       l.Addr().(*net.TCPAddr).Port,
-		quit:       make(chan interface{}),
+		keysDir:  keysDir,
+		listener: l,
+		port:     l.Addr().(*net.TCPAddr).Port,
+		quit:     make(chan interface{}),
 	}
 	go s.serve()
 	return s, nil
@@ -182,6 +164,32 @@ func (s *TangServer) handleConection(conn net.Conn) {
 	}
 }
 
-func (s *TangServer) TangConfig() string {
-	return fmt.Sprintf(`{"url":"http://localhost:%d", "thp":"%s"}`, s.port, s.thumbprint)
+// hash algorithm names for'jose jwk thp'
+var algos = map[crypto.Hash]string{
+	crypto.SHA1:   "S1",
+	crypto.SHA256: "S256",
+}
+
+func (s *TangServer) thumbprint(h crypto.Hash) (string, error) {
+	algo, ok := algos[h]
+	if !ok {
+		return "", fmt.Errorf("do not know how to calculate thumbprint for hash %s", h.String())
+	}
+
+	thpCmd := exec.Command("jose", "jwk", "thp", "-a", algo, "-i", s.keysDir+"/sign.jwk")
+	var thpOut bytes.Buffer
+	thpCmd.Stdout = &thpOut
+	if err := thpCmd.Run(); err != nil {
+		return "", err
+	}
+
+	return thpOut.String(), nil
+}
+
+func (s *TangServer) TangConfig(h crypto.Hash) (string, error) {
+	thp, err := s.thumbprint(h)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(`{"url":"http://localhost:%d", "thp":"%s"}`, s.port, thp), nil
 }

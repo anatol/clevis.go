@@ -2,6 +2,7 @@ package clevis
 
 import (
 	"bytes"
+	"crypto"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -29,7 +30,11 @@ func TestDecryptSss(t *testing.T) {
 	// clevis-encrypt-sss '{"t":1, "pins": {"tang": [{"url":"router.lan:8888"},{"url":"router.lan:8888"}]}}' <<< "test"
 	var tangConfigs [num]string
 	for i, s := range servers {
-		tangConfigs[i] = s.TangConfig()
+		config, err := s.TangConfig(crypto.SHA256)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tangConfigs[i] = config
 	}
 	sssConfig := fmt.Sprintf(`{"t":%d, "pins": {"tang": [%s]}}`, threshold, strings.Join(tangConfigs[:], ","))
 	encryptCmd := exec.Command("clevis-encrypt-sss", sssConfig)
