@@ -2,6 +2,7 @@ package clevis
 
 import (
 	"bytes"
+	"crypto"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -74,7 +75,13 @@ func TestDecryptTang(t *testing.T) {
 	}
 }
 
-func findSigningKey(dir string) (string, error) {
+// hash algorithm names for'jose jwk thp'
+var algos = map[crypto.Hash]string{
+	crypto.SHA1:   "S1",
+	crypto.SHA256: "S256",
+}
+
+func signingKeyThumbprint(dir string, hash crypto.Hash) (string, error) {
 	readDir, err := ioutil.ReadDir(dir)
 	if err != nil {
 		return "", err
@@ -90,11 +97,16 @@ func findSigningKey(dir string) (string, error) {
 			continue
 		}
 
-		thpCmd := exec.Command("/usr/bin/jose", "jwk", "thp", "-i", dir+"/"+f.Name())
+		algo, ok := algos[hash]
+		if !ok {
+			return "", fmt.Errorf("do not know how to calculate thumbprint for hash %s", hash.String())
+		}
+
+		thpCmd := exec.Command("/usr/bin/jose", "jwk", "thp", "-a", algo, "-i", dir+"/"+f.Name())
 		var thpOut bytes.Buffer
 		thpCmd.Stdout = &thpOut
 		if err := thpCmd.Run(); err != nil {
-			return "", nil
+			return "", err
 		}
 
 		return thpOut.String(), nil
@@ -121,7 +133,7 @@ func NewTangServer(t *testing.T) (*TangServer, error) {
 
 	// calculate thumbprint of the generated key using 'jose jwk thp -i $DBDIR/$SIG.jwk'
 	var thumbprint string
-	thumbprint, err = findSigningKey(keysDir)
+	thumbprint, err = signingKeyThumbprint(keysDir, crypto.SHA1)
 	if err != nil {
 		return nil, err
 	}

@@ -67,6 +67,7 @@ func convertToJsonForm(compactData []byte) ([]byte, error) {
 	cmd := exec.Command("jose", "jwe", "fmt", "-i-")
 	cmd.Stdin = bytes.NewReader(compactData)
 	cmd.Stdout = &outbuf
+	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
 		return nil, err
 	}

@@ -146,6 +146,20 @@ func performTangServerRequest(url string, key *ecdsa.PublicKey) (*ecdsa.PublicKe
 // go through keys and find one with thumbprint equal to 'kid'
 func findKey(advNode map[string]interface{}, kid string) (*ecdsa.PublicKey, error) {
 	keys := advNode["keys"].([]interface{})
+	thumbprint, err := base64.RawURLEncoding.DecodeString(kid)
+	if err != nil {
+		return nil, err
+	}
+	var hash crypto.Hash
+	switch len(thumbprint) {
+	case crypto.SHA256.Size():
+		hash = crypto.SHA256
+	case crypto.SHA1.Size():
+		hash = crypto.SHA1
+	default:
+		return nil, fmt.Errorf("cannot detect hash algorithm for thumbprint with size %d", len(thumbprint))
+	}
+
 	for _, k := range keys {
 		keyBytes, err := json.Marshal(k)
 		if err != nil {
@@ -157,11 +171,11 @@ func findKey(advNode map[string]interface{}, kid string) (*ecdsa.PublicKey, erro
 			return nil, err
 		}
 
-		thp, err := webKey.Thumbprint(crypto.SHA1)
+		thp, err := webKey.Thumbprint(hash)
 		if err != nil {
 			return nil, err
 		}
-		if kid == base64.RawURLEncoding.EncodeToString(thp) {
+		if bytes.Equal(thumbprint, thp) {
 			var key ecdsa.PublicKey
 			if err := webKey.Raw(&key); err != nil {
 				return nil, err
