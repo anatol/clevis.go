@@ -81,37 +81,19 @@ var algos = map[crypto.Hash]string{
 }
 
 func signingKeyThumbprint(dir string, hash crypto.Hash) (string, error) {
-	readDir, err := os.ReadDir(dir)
-	if err != nil {
+	algo, ok := algos[hash]
+	if !ok {
+		return "", fmt.Errorf("do not know how to calculate thumbprint for hash %s", hash.String())
+	}
+
+	thpCmd := exec.Command("jose", "jwk", "thp", "-a", algo, "-i", dir+"/sign.jwk")
+	var thpOut bytes.Buffer
+	thpCmd.Stdout = &thpOut
+	if err := thpCmd.Run(); err != nil {
 		return "", err
 	}
 
-	for _, f := range readDir {
-		marker := `"key_ops":["sign","verify"]`
-		content, err := os.ReadFile(dir + "/" + f.Name())
-		if err != nil {
-			return "", err
-		}
-		if !bytes.Contains(content, []byte(marker)) {
-			continue
-		}
-
-		algo, ok := algos[hash]
-		if !ok {
-			return "", fmt.Errorf("do not know how to calculate thumbprint for hash %s", hash.String())
-		}
-
-		thpCmd := exec.Command("jose", "jwk", "thp", "-a", algo, "-i", dir+"/"+f.Name())
-		var thpOut bytes.Buffer
-		thpCmd.Stdout = &thpOut
-		if err := thpCmd.Run(); err != nil {
-			return "", err
-		}
-
-		return thpOut.String(), nil
-	}
-
-	return "", fmt.Errorf("cannot find a key with 'sign' op")
+	return thpOut.String(), nil
 }
 
 type TangServer struct {
@@ -125,7 +107,7 @@ type TangServer struct {
 func NewTangServer(t *testing.T) (*TangServer, error) {
 	// generate server keys
 	keysDir := t.TempDir()
-	err := exec.Command(tangBinLocation+"tangd-keygen", keysDir).Run()
+	err := exec.Command(tangBinLocation+"tangd-keygen", keysDir, "sign", "exchange").Run()
 	if err != nil {
 		return nil, err
 	}
