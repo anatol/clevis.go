@@ -1,0 +1,73 @@
+#!/bin/bash -e
+# vim: set tabstop=8 shiftwidth=4 softtabstop=4 expandtab smarttab colorcolumn=80:
+#
+# Copyright (c) 2021 Anatol Pomazau
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+[ $# -eq 1 ] && [ "$1" == "--summary" ] && exit 2
+
+if [ -t 0 ]; then
+    exec >&2
+    echo
+    echo "Usage: clevis decrypt yubikey < JWE > PLAINTEXT"
+    echo
+    exit 2
+fi
+
+read -r -d . hdr
+
+if ! jhd="$(jose b64 dec -i- <<< "$hdr")"; then
+    echo "Error decoding JWE protected header!" >&2
+    exit 1
+fi
+
+if [ "$(jose fmt -j- -Og clevis -g pin -u- <<< "$jhd")" != "yubikey" ]; then
+    echo "JWE pin mismatch!" >&2
+    exit 1
+fi
+
+type=$(jose fmt -j- -Og clevis -g yubikey -g type -u- <<< "$jhd")
+if [ "$type" != "chalresp" ]; then
+    echo "JWE yubikey type mismatch!" >&2
+    exit 1
+fi
+
+slot=$(jose fmt -j- -Og clevis -g yubikey -g slot -Io- <<< "$jhd")
+
+challenge=$(jose fmt -j- -Og clevis -g yubikey -g challenge -u- <<< "$jhd" | jose b64 dec -i - | xxd -p -c 1000)
+response=$(echo -n $challenge | ykchalresp -x -i- -$slot)
+
+# nettle-pbkdf2 used below hardcodes pbkdf2 with sha256
+kdf_type=$(jose fmt -j- -Og clevis -g yubikey -g kdf -g type -u- <<< "$jhd")
+if [ "$kdf_type" != "pbkdf2" ]; then
+    echo "JWE yubikey supports pbkdf2 kdf only!" >&2
+    exit 1
+fi
+
+kdf_hash=$(jose fmt -j- -Og clevis -g yubikey -g kdf -g hash -u- <<< "$jhd")
+if [ "$kdf_hash" != "sha256" ]; then
+    echo "JWE yubikey supports sha256 hash only!" >&2
+    exit 1
+fi
+
+salt_hex=$(jose fmt -j- -Og clevis -g yubikey -g kdf -g salt -u- <<< "$jhd" | jose b64 dec -i - | xxd -p -c 1000)
+iter=$(jose fmt -j- -Og clevis -g yubikey -g kdf -g iter -Io- <<< "$jhd")
+
+key=$(echo -n $response | xxd -r -p | nettle-pbkdf2 --raw --iterations $iter --length 32 --hex-salt $salt_hex | jose b64 enc -I -)
+
+jwk="$(jose jwk gen -i '{"alg":"A256GCM"}')"
+jwk="$(jose fmt -j "$jwk" -q "$key" -s k -Uo-)"
+
+(echo -n "$jwk$hdr."; /bin/cat) | jose jwe dec -k- -i-

@@ -30,6 +30,8 @@ func Decrypt(data []byte) ([]byte, error) {
 		return DecryptSss(msg, clevis)
 	case "tpm2":
 		return DecryptTpm2(msg, clevis)
+	case "yubikey":
+		return DecryptYubikey(msg, clevis)
 	default:
 		return nil, fmt.Errorf("clevis.go: unknown pin '%v'", pin)
 	}

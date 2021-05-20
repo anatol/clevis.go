@@ -1,0 +1,69 @@
+#!/bin/bash -e
+# vim: set tabstop=8 shiftwidth=4 softtabstop=4 expandtab smarttab colorcolumn=80:
+#
+# Copyright (c) 2021 Anatol Pomazau.
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#
+
+SUMMARY="Encrypts using a Yubikey binding policy"
+
+if [ "$1" == "--summary" ]; then
+    echo "$SUMMARY"
+    exit 0
+fi
+
+if [ -t 0 ]; then
+    exec >&2
+    echo
+    echo "Usage: clevis encrypt yubikey CONFIG < PLAINTEXT > JWE"
+    echo
+    echo "$SUMMARY"
+    echo
+    echo "This command uses the following configuration properties:"
+    echo
+    echo "  slot: <integer>  Yubikey slot number (default: 1)"
+    exit 2
+fi
+
+if ! cfg="$(jose fmt -j- -Oo- <<<"$1" 2>/dev/null)"; then
+    echo "Configuration is malformed!" >&2
+    exit 1
+fi
+
+slot=$(jose fmt -j- -Og slot -Io- <<<"$cfg") || slot=1
+
+CHALLENGE_SIZE=32
+SALT_SIZE=32
+
+challenge=$(openssl rand -hex $CHALLENGE_SIZE)
+response="$(echo -n $challenge | ykchalresp -x -$slot -i-)"
+
+iter=1000
+salt_hex=$(openssl rand -hex $SALT_SIZE)
+key=$(echo -n "$response" | xxd -r -p | nettle-pbkdf2 --raw --iterations $iter --length 32 --hex-salt $salt_hex | jose b64 enc -I -)
+
+jwk="$(jose jwk gen -i '{"alg":"A256GCM"}')"
+jwk="$(jose fmt -j "$jwk" -q "$key" -s k -Uo-)"
+
+jwe='{"protected":{"clevis":{"pin":"yubikey","yubikey":{"type":"chalresp"}}}}'
+
+kdf='{"type":"pbkdf2","hash":"sha256"}'
+base64_salt=$(echo -n "$salt_hex" | xxd -r -p | jose b64 enc -I -)
+kdf="$(jose fmt -j "$kdf" -j $iter -Is iter -U -q "$base64_salt" -Ss salt -Uo-)"
+
+base64_challenge=$(echo -n $challenge | xxd -r -p | jose b64 enc -I -)
+jwe="$(jose fmt -j "$jwe" -g protected -g clevis -g yubikey -q "$base64_challenge" -Ss challenge -U -j $slot -Is slot -U -j $kdf -Os kdf -UUUUo-)"
+
+exec jose jwe enc -i- -k- -I- -c < <(echo -n "$jwe$jwk"; /bin/cat)
