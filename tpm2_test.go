@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func checkDecryption(t *testing.T, tpmPathEnvvar string) {
@@ -17,20 +19,20 @@ func checkDecryption(t *testing.T, tpmPathEnvvar string) {
 	clevisConfigs := []string{
 		`{}`,
 		`{"pcr_bank":"sha1","pcr_ids":"0,1"}`,
+		`{"key":"rsa"}`,
 	}
 
 	for _, c := range clevisConfigs {
-		var outbuf, errbuf bytes.Buffer
+		var outbuf bytes.Buffer
 		cmd := exec.Command("./clevis-encrypt-tpm2", c)
 		if tpmPathEnvvar != "" {
 			cmd.Env = append(os.Environ(), tpmPathEnvvar)
 		}
 		cmd.Stdin = strings.NewReader(inputText)
 		cmd.Stdout = &outbuf
-		cmd.Stderr = &errbuf
+		cmd.Stderr = os.Stderr
 
 		if err := cmd.Run(); err != nil {
-			fmt.Print(errbuf.String())
 			t.Fatal(err)
 		}
 
@@ -84,6 +86,7 @@ func TestDecryptTpm2Hardware(t *testing.T) {
 		t.Skip("There is no hardware TPM chip at this system")
 	}
 
+	useSWEmulatorPort = -1
 	checkDecryption(t, "") // by default tpm-tools will use /dev/tpmrmX
 }
 
@@ -95,8 +98,75 @@ func TestDecryptTpm2Emulator(t *testing.T) {
 	defer tpm.Stop()
 
 	useSWEmulatorPort = tpm.port
-
 	checkDecryption(t, tpm.TctiEnvvar())
+}
+
+func checkEncryption(t *testing.T, tpmPathEnvvar string) {
+	inputText := "hi"
+
+	clevisConfigs := []string{
+		`{}`,
+		`{"pcr_bank":"sha1","pcr_ids":"0,1"}`,
+		`{"key":"rsa"}`,
+	}
+
+	for _, c := range clevisConfigs {
+		// decrypt compact form using our implementation
+		encrypted, err := EncryptTpm2([]byte(inputText), c)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		decrypted, err := Decrypt(encrypted)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(decrypted) != inputText {
+			t.Fatalf("tpm2 decryption failed: expected '%s', got '%s'", inputText, string(decrypted))
+		}
+
+		var outbuf bytes.Buffer
+		cmd := exec.Command("./clevis-decrypt-tpm2")
+		if tpmPathEnvvar != "" {
+			cmd.Env = append(os.Environ(), tpmPathEnvvar)
+		}
+		cmd.Stdin = bytes.NewReader(encrypted)
+		cmd.Stdout = &outbuf
+		cmd.Stderr = os.Stderr
+
+		if err := cmd.Run(); err != nil {
+			t.Fatal(err)
+		}
+
+		if outbuf.String() != inputText {
+			t.Fatalf("tpm2 decryption failed: expected '%s', got '%s'", inputText, outbuf.String())
+		}
+	}
+}
+
+func TestEncryptTpm2Hardware(t *testing.T) {
+	matches, err := filepath.Glob("/sys/kernel/security/tpm*")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(matches) == 0 {
+		t.Skip("There is no hardware TPM chip at this system")
+	}
+
+	useSWEmulatorPort = -1
+	checkEncryption(t, "") // by default tpm-tools will use /dev/tpmrmX
+}
+
+func TestEncryptTpm2Emulator(t *testing.T) {
+	tpm, err := NewTpmEmulator(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tpm.Stop()
+
+	useSWEmulatorPort = tpm.port
+	checkEncryption(t, tpm.TctiEnvvar())
 }
 
 type TpmEmulator struct {
@@ -136,6 +206,23 @@ func NewTpmEmulator(stateDir string) (*TpmEmulator, error) {
 		controlPort: 2322,
 		stateDir:    stateDir,
 		cmd:         serverCmd,
+	}
+
+	started := false
+	timeout := time.Now().Add(3 * time.Second) // wait for the service startup for 3 seconds
+	for time.Now().Before(timeout) {
+		dev, err := net.Dial("tcp", fmt.Sprintf(":%d", device.port))
+		if err != nil {
+			continue
+		}
+		_ = dev.Close()
+
+		started = true
+		break
+	}
+
+	if !started {
+		return nil, fmt.Errorf("swtpm instance timed out to start")
 	}
 
 	return device, nil

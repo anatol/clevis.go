@@ -2,10 +2,12 @@ package clevis
 
 import (
 	"bytes"
+	"crypto/rand"
 	"crypto/sha1"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"hash"
 	"os/exec"
@@ -33,6 +35,66 @@ func DecryptYubikey(msg *jwe.Message, clevisNode map[string]interface{}) ([]byte
 	default:
 		return nil, fmt.Errorf("clevis.go/yubikey: unknown type %s", yubType)
 	}
+}
+
+type yubikeyConfig struct {
+	Slot int `json:"slot"`
+}
+
+func EncryptYubikey(data []byte, cfg string) ([]byte, error) {
+	var c yubikeyConfig
+	if err := json.Unmarshal([]byte(cfg), &c); err != nil {
+		return nil, err
+	}
+
+	if c.Slot < 1 || c.Slot > 2 {
+		return nil, fmt.Errorf("invalid slot value %d", c.Slot)
+	}
+
+	challenge := make([]byte, 32)
+	if _, err := rand.Read(challenge); err != nil {
+		return nil, err
+	}
+
+	var outBuffer, errBuffer bytes.Buffer
+	cmd := exec.Command("ykchalresp", "-i-", "-"+strconv.Itoa(c.Slot))
+	cmd.Stdin = bytes.NewReader(challenge)
+	cmd.Stdout = &outBuffer
+	cmd.Stderr = &errBuffer
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("%v: %s", err, errBuffer.String())
+	}
+	// out is hex
+	response := outBuffer.Bytes()[:40] // cut the trailing newline
+	responseBin := make([]byte, 20)
+	if _, err := hex.Decode(responseBin, response); err != nil {
+		return nil, err
+	}
+
+	salt := make([]byte, 32)
+	if _, err := rand.Read(salt); err != nil {
+		return nil, err
+	}
+
+	iterations := 1000
+	key := pbkdf2.Key(responseBin, salt, iterations, 32, sha256.New)
+
+	hdrs := jwe.NewHeaders()
+	yubikeyProps := map[string]interface{}{}
+	yubikeyProps["slot"] = c.Slot
+	yubikeyProps["type"] = "chalresp"
+	yubikeyProps["challenge"] = base64.RawURLEncoding.EncodeToString(challenge)
+	kdf := map[string]interface{}{}
+	kdf["type"] = "pbkdf2"
+	kdf["hash"] = "sha256"
+	kdf["iter"] = iterations
+	kdf["salt"] = base64.RawURLEncoding.EncodeToString(salt)
+	yubikeyProps["kdf"] = kdf
+	if err := hdrs.Set("clevis", map[string]interface{}{"pin": "yubikey", "yubikey": yubikeyProps}); err != nil {
+		return nil, err
+	}
+
+	return jwe.Encrypt(data, jwa.DIRECT, key, jwa.A256GCM, jwa.NoCompress, jwe.WithProtectedHeaders(hdrs))
 }
 
 func challengeResponse(msg *jwe.Message, node map[string]interface{}) ([]byte, error) {

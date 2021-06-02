@@ -37,3 +37,18 @@ func Decrypt(data []byte) ([]byte, error) {
 		return nil, fmt.Errorf("clevis.go: unknown pin '%v'", pin)
 	}
 }
+
+func Encrypt(data []byte, pin string, config string) ([]byte, error) {
+	switch pin {
+	case "tang":
+		return EncryptTang(data, config)
+	case "sss":
+		return EncryptSss(data, config)
+	case "tpm2":
+		return EncryptTpm2(data, config)
+	case "yubikey":
+		return EncryptYubikey(data, config)
+	default:
+		return nil, fmt.Errorf("clevis.go: unknown pin '%v'", pin)
+	}
+}

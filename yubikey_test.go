@@ -50,3 +50,39 @@ func TestDecryptYubikey(t *testing.T) {
 		}
 	}
 }
+
+func TestEncryptYubikey(t *testing.T) {
+	inputText := "testing yubikey"
+
+	clevisConfigs := []string{
+		`{"slot":2}`,
+	}
+
+	for _, c := range clevisConfigs {
+		encrypted, err := EncryptYubikey([]byte(inputText), c)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		decrypted1, err := Decrypt(encrypted)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(decrypted1) != inputText {
+			t.Fatalf("unable decrypt data: expected %s, got %s", inputText, string(decrypted1))
+		}
+
+		var outbuf bytes.Buffer
+		cmd := exec.Command("./clevis-decrypt-yubikey")
+		cmd.Stdin = bytes.NewReader(encrypted)
+		cmd.Stdout = &outbuf
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			t.Fatal(err)
+		}
+		decrypted2 := outbuf.Bytes()
+		if string(decrypted2) != inputText {
+			t.Fatalf("unable decrypt data: expected %s, got %s", inputText, string(decrypted2))
+		}
+	}
+}

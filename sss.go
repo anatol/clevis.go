@@ -1,7 +1,9 @@
 package clevis
 
 import (
+	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"math/big"
 
@@ -76,6 +78,100 @@ func DecryptSss(msg *jwe.Message, clevisNode map[string]interface{}) ([]byte, er
 	cek = expandBuffer(cek, pointLength)
 
 	return msg.Decrypt(jwa.DIRECT, cek)
+}
+
+type sssConfig struct {
+	Threshold int                          `json:"t"`
+	Pins      map[string][]json.RawMessage `json:"pins"`
+}
+
+func EncryptSss(data []byte, cfg string) ([]byte, error) {
+	var c sssConfig
+	if err := json.Unmarshal([]byte(cfg), &c); err != nil {
+		return nil, err
+	}
+
+	if c.Threshold < 1 {
+		return nil, fmt.Errorf("invalid threshold value")
+	}
+
+	primeLength := 32
+	p, err := rand.Prime(rand.Reader, primeLength*8) // 32 bytes long prime
+	if err != nil {
+		return nil, err
+	}
+	if len(p.Bytes()) != primeLength {
+		return nil, fmt.Errorf("generated prime is not long enough")
+	}
+
+	coeff := make([]*big.Int, c.Threshold)
+	for i := 0; i < c.Threshold; i++ {
+		n, err := rand.Int(rand.Reader, p)
+		if err != nil {
+			return nil, err
+		}
+		coeff[i] = n
+	}
+
+	var pinSecrets []string // encrypted pin secrets, what later becomes 'jwe' node
+	for name, entries := range c.Pins {
+		for _, entry := range entries {
+			pinCfg, err := entry.MarshalJSON()
+			if err != nil {
+				return nil, err
+			}
+
+			x, err := rand.Int(rand.Reader, p)
+			if err != nil {
+				return nil, err
+			}
+
+			/* y += coeff[i] * x^i */
+			y := big.NewInt(0)
+			for i, ci := range coeff {
+				z := big.NewInt(0)
+				z.Exp(x, big.NewInt(int64(i)), p)
+				z.Mul(z, ci)
+				z.Mod(z, p)
+
+				y.Add(y, z)
+			}
+			y.Mod(y, p)
+
+			point := make([]byte, 2*primeLength)
+			copy(point, extendBytes(x.Bytes(), primeLength))
+			copy(point[primeLength:], extendBytes(y.Bytes(), primeLength))
+
+			secret, err := Encrypt(point, name, string(pinCfg))
+			if err != nil {
+				return nil, err
+			}
+			pinSecrets = append(pinSecrets, string(secret))
+		}
+	}
+
+	primeEncoded := base64.RawURLEncoding.EncodeToString(p.Bytes())
+
+	hdrs := jwe.NewHeaders()
+	sssProps := map[string]interface{}{"t": c.Threshold, "p": primeEncoded, "jwe": pinSecrets}
+	if err := hdrs.Set("clevis", map[string]interface{}{"pin": "sss", "sss": sssProps}); err != nil {
+		return nil, err
+	}
+
+	encKey := extendBytes(coeff[0].Bytes(), primeLength) // we use 0-th coefficient as the encryption key
+	return jwe.Encrypt(data, jwa.DIRECT, encKey, jwa.A256GCM, jwa.NoCompress, jwe.WithProtectedHeaders(hdrs))
+}
+
+func extendBytes(bytes []byte, length int) []byte {
+	inputLen := len(bytes)
+	if inputLen == length {
+		return bytes
+	}
+	if inputLen > length {
+		panic("received array length is larger than requested")
+	}
+	padding := make([]byte, length-inputLen)
+	return append(padding, bytes...)
 }
 
 type point struct {

@@ -50,6 +50,9 @@ func checkDecryptTang(t *testing.T, h crypto.Hash) {
 	encryptCmd.Stdin = strings.NewReader(inputText)
 	var encryptedData bytes.Buffer
 	encryptCmd.Stdout = &encryptedData
+	if testing.Verbose() {
+		encryptCmd.Stderr = os.Stderr
+	}
 	if err := encryptCmd.Run(); err != nil {
 		t.Fatal(err)
 	}
@@ -84,6 +87,54 @@ func TestDecryptTangSHA1(t *testing.T) {
 
 func TestDecryptTangSHA256(t *testing.T) {
 	checkDecryptTang(t, crypto.SHA256)
+}
+
+func checkEncryptTang(t *testing.T, h crypto.Hash) {
+	// start Tang server
+	s, err := NewTangServer(t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Stop()
+
+	const inputText = "some plaintext"
+
+	// encrypt a text using 'clevis-encrypt-tang' like this:
+	// clevis-encrypt-tang '{"url":"http://localhost", "thp":"1GDW0VlDv95DwPIm5EOqZVZCMeo"}' <<< "hello"
+	config, err := s.TangConfig(h)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// decrypt this text using our implementation
+	encrypted, err := EncryptTang([]byte(inputText), config)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	decrypted, err := Decrypt(encrypted)
+	if string(decrypted) != inputText {
+		t.Fatalf("decryption decryption failed: expected '%s', got '%s'", inputText, string(decrypted))
+	}
+
+	decryptCmd := exec.Command("clevis-decrypt-tang")
+	decryptCmd.Stdin = bytes.NewReader(encrypted)
+	var decryptedData bytes.Buffer
+	decryptCmd.Stdout = &decryptedData
+	if testing.Verbose() {
+		decryptCmd.Stderr = os.Stderr
+	}
+	if err := decryptCmd.Run(); err != nil {
+		t.Fatal(err)
+	}
+
+	if decryptedData.String() != inputText {
+		t.Fatalf("decryption decryption failed: expected '%s', got '%s'", inputText, string(encrypted))
+	}
+}
+
+func TestEncryptTangSHA256(t *testing.T) {
+	checkEncryptTang(t, crypto.SHA256)
 }
 
 type TangServer struct {
@@ -142,29 +193,27 @@ func (s *TangServer) serve() {
 
 func (s *TangServer) handleConection(conn net.Conn) {
 	buf := make([]byte, 4096)
-	for {
-		n, err := conn.Read(buf)
-		if err != nil && err != io.EOF {
-			log.Println("read error", err)
-			return
-		}
-		if n == 0 {
-			return
-		}
+	n, err := conn.Read(buf)
+	if err != nil && err != io.EOF {
+		log.Println("read error", err)
+		return
+	}
+	if n == 0 {
+		return
+	}
 
-		tangCmd := exec.Command(tangBinLocation+"tangd", s.keysDir)
-		tangCmd.Stdin = bytes.NewReader(buf[:n])
-		if testing.Verbose() {
-			tangCmd.Stderr = os.Stderr
-		}
-		tangCmd.Stdout = conn
-		if err := tangCmd.Run(); err != nil {
-			log.Println(err)
-		}
+	tangCmd := exec.Command(tangBinLocation+"tangd", s.keysDir)
+	tangCmd.Stdin = bytes.NewReader(buf[:n])
+	tangCmd.Stdout = conn
+	if testing.Verbose() {
+		tangCmd.Stderr = os.Stderr
+	}
+	if err := tangCmd.Run(); err != nil {
+		log.Println(err)
 	}
 }
 
-// hash algorithm names for'jose jwk thp'
+// hash algorithm names for 'jose jwk thp'
 var algos = map[crypto.Hash]string{
 	crypto.SHA1:   "S1",
 	crypto.SHA256: "S256",
@@ -179,6 +228,9 @@ func (s *TangServer) thumbprint(h crypto.Hash) (string, error) {
 	thpCmd := exec.Command("jose", "jwk", "thp", "-a", algo, "-i", s.keysDir+"/sign.jwk")
 	var thpOut bytes.Buffer
 	thpCmd.Stdout = &thpOut
+	if testing.Verbose() {
+		thpCmd.Stderr = os.Stderr
+	}
 	if err := thpCmd.Run(); err != nil {
 		return "", err
 	}

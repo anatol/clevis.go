@@ -2,6 +2,7 @@ package clevis
 
 import (
 	"bytes"
+	"context"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/rand"
@@ -11,10 +12,12 @@ import (
 	"io"
 	"math/big"
 	"net/http"
+	"os"
 
 	"github.com/lestrrat-go/jwx/jwa"
 	"github.com/lestrrat-go/jwx/jwe"
 	"github.com/lestrrat-go/jwx/jwk"
+	"github.com/lestrrat-go/jwx/jws"
 )
 
 // DecryptTang decrypts a jwe message bound with Tang clevis pin
@@ -24,30 +27,41 @@ func DecryptTang(msg *jwe.Message, clevisNode map[string]interface{}) ([]byte, e
 		return nil, fmt.Errorf("cannot parse provided token, node 'clevis.tang'")
 	}
 
-	recipient := msg.Recipients()[0]
-	keyId := recipient.Headers().KeyID()
-
-	// JWX does not implement ECMR (used by clevis/jose tool).
-	// So we perform ECMR exchange ourselves, construct the EC public key as described here https://github.com/latchset/tang#recovery
-	// and then use it as a new ephemeral key in ECDS.
-	// For private key used in msg.Decrypt(ECDH_ES) we provide (1,0) thus ECDS multiplication does not modify our new key.
-	var epk ecdsa.PublicKey
-	if err := recipient.Headers().EphemeralPublicKey().Raw(&epk); err != nil {
-		return nil, err
+	advNode, ok := tangNode["adv"].(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("cannot parse provided token, node 'clevis.tang.adv'")
 	}
-	receivedKey, err := performEcmrExhange(tangNode, keyId, &epk)
+
+	advNodeBytes, err := json.Marshal(advNode)
 	if err != nil {
 		return nil, err
 	}
 
-	if err := recipient.Headers().Set(jwe.AlgorithmKey, jwa.ECDH_ES); err != nil {
+	advertizedKeys, err := jwk.Parse(advNodeBytes)
+	if err != nil {
+		return nil, err
+	}
+
+	url, ok := tangNode["url"].(string)
+	if !ok {
+		return nil, fmt.Errorf("cannot parse provided token, node 'clevis.tang.url'")
+	}
+
+	headers := msg.Recipients()[0].Headers()
+
+	receivedKey, err := performEcmrExhange(url, advertizedKeys, headers.KeyID(), headers.EphemeralPublicKey())
+	if err != nil {
+		return nil, err
+	}
+
+	if err := headers.Set(jwe.AlgorithmKey, jwa.ECDH_ES); err != nil {
 		return nil, err
 	}
 	newEpk, err := jwk.New(receivedKey)
 	if err != nil {
 		return nil, err
 	}
-	if err := recipient.Headers().Set(jwe.EphemeralPublicKeyKey, newEpk); err != nil {
+	if err := headers.Set(jwe.EphemeralPublicKeyKey, newEpk); err != nil {
 		return nil, err
 	}
 	identityKey := ecdsa.PrivateKey{
@@ -60,19 +74,174 @@ func DecryptTang(msg *jwe.Message, clevisNode map[string]interface{}) ([]byte, e
 	return msg.Decrypt(jwa.ECDH_ES, &identityKey)
 }
 
-func performEcmrExhange(tangNode map[string]interface{}, serverKeyId string, epk *ecdsa.PublicKey) (*ecdsa.PublicKey, error) {
-	advNode, ok := tangNode["adv"].(map[string]interface{})
-	if !ok {
-		return nil, fmt.Errorf("cannot parse provided token, node 'clevis.tang.adv'")
+type tangConfig struct {
+	Advertisement *json.RawMessage `json:"adv"`
+	URL           string           `json:"url"`
+	Thumbprint    string           `json:"thp"`
+}
+
+var thpAlgos = []crypto.Hash{
+	crypto.SHA256,
+	crypto.SHA1,
+}
+
+func EncryptTang(data []byte, cfg string) ([]byte, error) {
+	var c tangConfig
+	var path string
+	var msgContent []byte
+
+	if err := json.Unmarshal([]byte(cfg), &c); err != nil {
+		return nil, err
 	}
 
-	urlNode, ok := tangNode["url"].(string)
-	if !ok {
-		return nil, fmt.Errorf("cannot parse provided token, node 'clevis.tang.url'")
+	if c.URL == "" {
+		return nil, fmt.Errorf("missing 'url' property")
 	}
 
-	serverKey, err := findKey(advNode, serverKeyId) // foundKey is the same as 'srv'
+	thumbprint := c.Thumbprint
+	if c.Advertisement == nil {
+		// no advertisement provided, fetch one from the server
+		resp, err := http.Get(c.URL + "/adv/" + thumbprint)
+		if err != nil {
+			return nil, err
+		}
+		msgContent, err = io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, err
+		}
+	} else if err := json.Unmarshal(*c.Advertisement, &path); err == nil {
+		// advertisement is a file
+		msgContent, err = os.ReadFile(path)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		msgContent = *c.Advertisement
+	}
+
+	msg, err := jws.Parse(msgContent)
 	if err != nil {
+		return nil, err
+	}
+
+	keys, err := jwk.Parse(msg.Payload())
+	if err != nil {
+		return nil, err
+	}
+
+	verifyKey := filterKey(keys, jwk.KeyOpVerify)
+	if verifyKey == nil {
+		return nil, fmt.Errorf("advertisement is missing signatures")
+	}
+
+	if _, err = jws.Verify(msgContent, jwa.SignatureAlgorithm(verifyKey.Algorithm()), verifyKey); err != nil {
+		return nil, err
+	}
+
+	if thumbprint != "" {
+		verified, err := verifyThumbprint(verifyKey, thumbprint)
+		if err != nil {
+			return nil, err
+		}
+		if !verified {
+			return nil, fmt.Errorf("trusted JWK '%s' did not sign the advertisement!", thumbprint)
+		}
+	}
+
+	exchangeKey := filterKey(keys, jwk.KeyOpDeriveKey)
+	if exchangeKey == nil {
+		return nil, fmt.Errorf("no exchange keys found")
+	}
+
+	// we are going to modify the key but 'adv' node should have original keys
+	exchangeKey, err = exchangeKey.Clone()
+	if err != nil {
+		return nil, err
+	}
+
+	if err := exchangeKey.Set(jwk.KeyOpsKey, jwk.KeyOperationList{}); err != nil {
+		return nil, err
+	}
+	if err := exchangeKey.Set(jwk.AlgorithmKey, ""); err != nil {
+		return nil, err
+	}
+
+	thp, err := exchangeKey.Thumbprint(crypto.SHA256)
+	if err != nil {
+		return nil, err
+	}
+	kid := base64.RawURLEncoding.EncodeToString(thp)
+
+	hdrs := jwe.NewHeaders()
+	if err := hdrs.Set(jwe.AlgorithmKey, jwa.ECDH_ES); err != nil {
+		return nil, err
+	}
+	if err := hdrs.Set(jwe.ContentEncryptionKey, jwa.A256GCM); err != nil {
+		return nil, err
+	}
+	if err := hdrs.Set(jwe.KeyIDKey, kid); err != nil {
+		return nil, err
+	}
+	tangProps := map[string]interface{}{"url": c.URL, "adv": keys}
+	if err := hdrs.Set("clevis", map[string]interface{}{"pin": "tang", "tang": tangProps}); err != nil {
+		return nil, err
+	}
+
+	return jwe.Encrypt(data, jwa.ECDH_ES, exchangeKey, jwa.A256GCM, jwa.NoCompress, jwe.WithProtectedHeaders(hdrs))
+}
+
+func verifyThumbprint(verifyKey jwk.Key, thumbprint string) (bool, error) {
+	thpBytes, err := base64.RawURLEncoding.DecodeString(thumbprint)
+	if err != nil {
+		return false, err
+	}
+
+	for _, a := range thpAlgos {
+		thp, err := verifyKey.Thumbprint(a)
+		if err != nil {
+			return false, err
+		}
+		if bytes.Equal(thpBytes, thp) {
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
+func filterKey(set jwk.Set, op jwk.KeyOperation) jwk.Key {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	for iter := set.Iterate(ctx); iter.Next(ctx); {
+		pair := iter.Pair()
+		key := pair.Value.(jwk.Key)
+
+		for _, o := range key.KeyOps() {
+			if o == op {
+				return key
+			}
+		}
+	}
+
+	return nil
+}
+
+func performEcmrExhange(url string, advertizedKeys jwk.Set, serverKeyId string, e jwk.Key) (*ecdsa.PublicKey, error) {
+	// JWX does not implement ECMR (used by clevis/jose tool).
+	// So we perform ECMR exchange ourselves, construct the EC public key as described here https://github.com/latchset/tang#recovery
+	// and then use it as a new ephemeral key in ECDS.
+	// For private key used in msg.Decrypt(ECDH_ES) we provide (1,0) thus ECDS multiplication does not modify our new key.
+	var epk ecdsa.PublicKey
+	if err := e.Raw(&epk); err != nil {
+		return nil, err
+	}
+	webKey, err := lookupKey(advertizedKeys, serverKeyId)
+	if err != nil {
+		return nil, err
+	}
+	var serverKey ecdsa.PublicKey
+	if err := webKey.Raw(&serverKey); err != nil {
 		return nil, err
 	}
 
@@ -90,7 +259,7 @@ func performEcmrExhange(tangNode map[string]interface{}, serverKeyId string, epk
 	x, y := ecCurve.Add(tempKey.X, tempKey.Y, epk.X, epk.Y)
 	xfrKey := &ecdsa.PublicKey{Curve: ecCurve, X: x, Y: y}
 
-	respKey, err := performTangServerRequest(urlNode+"/rec/"+serverKeyId, xfrKey)
+	respKey, err := performTangServerRequest(url+"/rec/"+serverKeyId, xfrKey)
 	if err != nil {
 		return nil, err
 	}
@@ -144,8 +313,7 @@ func performTangServerRequest(url string, key *ecdsa.PublicKey) (*ecdsa.PublicKe
 }
 
 // go through keys and find one with thumbprint equal to 'kid'
-func findKey(advNode map[string]interface{}, kid string) (*ecdsa.PublicKey, error) {
-	keys := advNode["keys"].([]interface{})
+func lookupKey(keys jwk.Set, kid string) (jwk.Key, error) {
 	thumbprint, err := base64.RawURLEncoding.DecodeString(kid)
 	if err != nil {
 		return nil, err
@@ -160,28 +328,18 @@ func findKey(advNode map[string]interface{}, kid string) (*ecdsa.PublicKey, erro
 		return nil, fmt.Errorf("cannot detect hash algorithm for thumbprint with size %d", len(thumbprint))
 	}
 
-	for _, k := range keys {
-		keyBytes, err := json.Marshal(k)
-		if err != nil {
-			return nil, err
-		}
+	for iter := keys.Iterate(context.TODO()); iter.Next(context.TODO()); {
+		pair := iter.Pair()
+		key := pair.Value.(jwk.Key)
 
-		webKey, err := jwk.ParseKey(keyBytes)
-		if err != nil {
-			return nil, err
-		}
-
-		thp, err := webKey.Thumbprint(hash)
+		thp, err := key.Thumbprint(hash)
 		if err != nil {
 			return nil, err
 		}
 		if bytes.Equal(thumbprint, thp) {
-			var key ecdsa.PublicKey
-			if err := webKey.Raw(&key); err != nil {
-				return nil, err
-			}
-			return &key, nil
+			return key, nil
 		}
 	}
-	return nil, fmt.Errorf("clevis.go/tang: a key with kid '%v' not found in the 'clevis/adv' node", kid)
+
+	return nil, nil
 }
