@@ -13,10 +13,11 @@ func Decrypt(data []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	clevis, ok := msg.Recipients()[0].Headers().PrivateParams()["clevis"].(map[string]interface{})
+	n, ok := msg.ProtectedHeaders().Get("clevis")
 	if !ok {
 		return nil, fmt.Errorf("clevis.go: provided message does not contain 'clevis' node")
 	}
+	clevis := n.(map[string]interface{})
 
 	pin, ok := clevis["pin"].(string)
 	if !ok {
