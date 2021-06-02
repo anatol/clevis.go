@@ -21,7 +21,7 @@ func checkDecryption(t *testing.T, tpmPathEnvvar string) {
 
 	for _, c := range clevisConfigs {
 		var outbuf, errbuf bytes.Buffer
-		cmd := exec.Command("./tpm2_test_clevis_encrypt", c)
+		cmd := exec.Command("./clevis-encrypt-tpm2", c)
 		if tpmPathEnvvar != "" {
 			cmd.Env = append(os.Environ(), tpmPathEnvvar)
 		}
