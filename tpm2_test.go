@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func checkDecryption(t *testing.T, tpmPathEnvvar string) {
@@ -37,7 +39,7 @@ func checkDecryption(t *testing.T, tpmPathEnvvar string) {
 		}
 
 		compactForm := outbuf.Bytes()
-		jsonForm, err := convertToJsonForm(compactForm)
+		jsonForm, err := convertToJSONForm(compactForm)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -62,8 +64,8 @@ func checkDecryption(t *testing.T, tpmPathEnvvar string) {
 	}
 }
 
-// convertToJsonForm converts jwx message from a compact form to JSON
-func convertToJsonForm(compactData []byte) ([]byte, error) {
+// convertToJSONForm converts jwx message from a compact form to JSON
+func convertToJSONForm(compactData []byte) ([]byte, error) {
 	var outbuf bytes.Buffer
 	// jose jwe fmt -i- -c <<< $data
 	cmd := exec.Command("jose", "jwe", "fmt", "-i-")
@@ -238,4 +240,37 @@ func (s *TpmEmulator) Stop() {
 
 func (s *TpmEmulator) TctiEnvvar() string {
 	return fmt.Sprintf(`TPM2TOOLS_TCTI=swtpm:host=localhost,port=%d`, s.port)
+}
+
+func TestTpm2ToConfig(t *testing.T) {
+	var tests = []struct {
+		pin      Tpm2Pin
+		expected Tpm2Config
+	}{{
+		pin:      Tpm2Pin{},
+		expected: Tpm2Config{},
+	}, {
+		pin: Tpm2Pin{
+			Hash:    "hash",
+			Key:     "key",
+			JwkPub:  "jwkpun",
+			JwkPriv: "jwkpriv",
+			PcrBank: "pcrbank",
+			PcrIds:  "pcrids",
+		},
+
+		expected: Tpm2Config{
+			Hash:    "hash",
+			Key:     "key",
+			PcrBank: "pcrbank",
+			PcrIds:  "pcrids",
+		},
+	}}
+
+	for _, test := range tests {
+		c, err := test.pin.toConfig()
+
+		assert.NoError(t, err)
+		assert.Equal(t, test.expected, c)
+	}
 }

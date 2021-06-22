@@ -20,19 +20,44 @@ import (
 	"github.com/lestrrat-go/jwx/jws"
 )
 
-// DecryptTang decrypts a jwe message bound with Tang clevis pin
-func DecryptTang(msg *jwe.Message, clevisNode map[string]interface{}) ([]byte, error) {
-	tangNode, ok := clevisNode["tang"].(map[string]interface{})
-	if !ok {
-		return nil, fmt.Errorf("cannot parse provided token, node 'clevis.tang'")
+// TangPin  represents the data tang needs to perform decryption
+type TangPin struct {
+	Advertisement json.RawMessage `json:"adv"`
+	URL           string          `json:"url"`
+}
+
+// toConfig converts a given TangPin to the corresponding TangConfig whach can be used for encryption
+func (p TangPin) toConfig() (TangConfig, error) {
+	c := TangConfig{
+		URL: p.URL,
 	}
 
-	advNode, ok := tangNode["adv"].(map[string]interface{})
-	if !ok {
+	if p.Advertisement != nil {
+		keys, err := jwk.Parse(p.Advertisement)
+		if err != nil {
+			return c, err
+		}
+		verifyKey := filterKey(keys, jwk.KeyOpVerify)
+		if verifyKey == nil {
+			return c, fmt.Errorf("No verify key in the stored advertisement")
+		}
+		thpBytes, err := verifyKey.Thumbprint(crypto.SHA1)
+		if err != nil {
+			return c, err
+		}
+		c.Thumbprint = base64.RawURLEncoding.EncodeToString(thpBytes)
+	}
+
+	return c, nil
+}
+
+// decrypt a jwe message bound with Tang clevis pin
+func (p TangPin) decrypt(msg *jwe.Message) ([]byte, error) {
+	if p.Advertisement == nil {
 		return nil, fmt.Errorf("cannot parse provided token, node 'clevis.tang.adv'")
 	}
 
-	advNodeBytes, err := json.Marshal(advNode)
+	advNodeBytes, err := json.Marshal(p.Advertisement)
 	if err != nil {
 		return nil, err
 	}
@@ -42,14 +67,13 @@ func DecryptTang(msg *jwe.Message, clevisNode map[string]interface{}) ([]byte, e
 		return nil, err
 	}
 
-	url, ok := tangNode["url"].(string)
-	if !ok {
+	if p.URL == "" {
 		return nil, fmt.Errorf("cannot parse provided token, node 'clevis.tang.url'")
 	}
 
 	headers := msg.Recipients()[0].Headers()
 
-	receivedKey, err := performEcmrExhange(url, advertizedKeys, headers.KeyID(), headers.EphemeralPublicKey())
+	receivedKey, err := performEcmrExhange(p.URL, advertizedKeys, headers.KeyID(), headers.EphemeralPublicKey())
 	if err != nil {
 		return nil, err
 	}
@@ -74,10 +98,25 @@ func DecryptTang(msg *jwe.Message, clevisNode map[string]interface{}) ([]byte, e
 	return msg.Decrypt(jwa.ECDH_ES, &identityKey)
 }
 
-type tangConfig struct {
-	Advertisement *json.RawMessage `json:"adv"`
-	URL           string           `json:"url"`
-	Thumbprint    string           `json:"thp"`
+// TangConfig represents the data needed to perform tang-based encryption
+type TangConfig struct {
+	// A trusted advertisement (raw JSON or a filename containing JSON)
+	Advertisement *json.RawMessage `json:"adv,omitempty"`
+
+	// The base URL of the Tang server (REQUIRED)
+	URL string `json:"url"`
+
+	// The thumbprint of a trusted signing key
+	Thumbprint string `json:"thp,omitempty"`
+}
+
+// NewTangConfig parses the given json-format tang config into a TangConfig
+func NewTangConfig(config string) (TangConfig, error) {
+	var c TangConfig
+	if err := json.Unmarshal([]byte(config), &c); err != nil {
+		return c, err
+	}
+	return c, nil
 }
 
 var thpAlgos = []crypto.Hash{
@@ -85,14 +124,19 @@ var thpAlgos = []crypto.Hash{
 	crypto.SHA1,
 }
 
-func EncryptTang(data []byte, cfg string) ([]byte, error) {
-	var c tangConfig
-	var path string
-	var msgContent []byte
-
-	if err := json.Unmarshal([]byte(cfg), &c); err != nil {
+// EncryptTang encrypts a bytestream according to the json-format tang config
+func EncryptTang(data []byte, config string) ([]byte, error) {
+	c, err := NewTangConfig(config)
+	if err != nil {
 		return nil, err
 	}
+	return c.encrypt(data)
+}
+
+// encrypt a bytestream according to the TangConfig
+func (c TangConfig) encrypt(data []byte) ([]byte, error) {
+	var path string
+	var msgContent []byte
 
 	if c.URL == "" {
 		return nil, fmt.Errorf("missing 'url' property")
@@ -144,7 +188,7 @@ func EncryptTang(data []byte, cfg string) ([]byte, error) {
 			return nil, err
 		}
 		if !verified {
-			return nil, fmt.Errorf("trusted JWK '%s' did not sign the advertisement!", thumbprint)
+			return nil, fmt.Errorf("trusted JWK '%s' did not sign the advertisement", thumbprint)
 		}
 	}
 
@@ -182,8 +226,19 @@ func EncryptTang(data []byte, cfg string) ([]byte, error) {
 	if err := hdrs.Set(jwe.KeyIDKey, kid); err != nil {
 		return nil, err
 	}
-	tangProps := map[string]interface{}{"url": c.URL, "adv": keys}
-	if err := hdrs.Set("clevis", map[string]interface{}{"pin": "tang", "tang": tangProps}); err != nil {
+	advertBytes, err := json.Marshal(keys)
+	if err != nil {
+		return nil, err
+	}
+	advert := json.RawMessage(advertBytes)
+	header := Pin{
+		Pin: "tang",
+		Tang: &TangPin{
+			URL:           c.URL,
+			Advertisement: advert,
+		},
+	}
+	if err := hdrs.Set("clevis", header); err != nil {
 		return nil, err
 	}
 
@@ -227,7 +282,7 @@ func filterKey(set jwk.Set, op jwk.KeyOperation) jwk.Key {
 	return nil
 }
 
-func performEcmrExhange(url string, advertizedKeys jwk.Set, serverKeyId string, e jwk.Key) (*ecdsa.PublicKey, error) {
+func performEcmrExhange(url string, advertizedKeys jwk.Set, serverKeyID string, e jwk.Key) (*ecdsa.PublicKey, error) {
 	// JWX does not implement ECMR (used by clevis/jose tool).
 	// So we perform ECMR exchange ourselves, construct the EC public key as described here https://github.com/latchset/tang#recovery
 	// and then use it as a new ephemeral key in ECDS.
@@ -236,7 +291,7 @@ func performEcmrExhange(url string, advertizedKeys jwk.Set, serverKeyId string, 
 	if err := e.Raw(&epk); err != nil {
 		return nil, err
 	}
-	webKey, err := lookupKey(advertizedKeys, serverKeyId)
+	webKey, err := lookupKey(advertizedKeys, serverKeyID)
 	if err != nil {
 		return nil, err
 	}
@@ -259,7 +314,7 @@ func performEcmrExhange(url string, advertizedKeys jwk.Set, serverKeyId string, 
 	x, y := ecCurve.Add(tempKey.X, tempKey.Y, epk.X, epk.Y)
 	xfrKey := &ecdsa.PublicKey{Curve: ecCurve, X: x, Y: y}
 
-	respKey, err := performTangServerRequest(url+"/rec/"+serverKeyId, xfrKey)
+	respKey, err := performTangServerRequest(url+"/rec/"+serverKeyID, xfrKey)
 	if err != nil {
 		return nil, err
 	}
