@@ -11,19 +11,53 @@ import (
 	"github.com/lestrrat-go/jwx/jwe"
 )
 
-// DecryptSss implements Shamir Secret Sharing decryption algorithm
-func DecryptSss(msg *jwe.Message, clevisNode map[string]interface{}) ([]byte, error) {
-	sssNode, ok := clevisNode["sss"].(map[string]interface{})
-	if !ok {
-		return nil, fmt.Errorf("clevis.go/sss: cannot parse provided token, node 'clevis.sss'")
-	}
+// SssPin represents the data samir secret sharing needs to perform decryption
+type SssPin struct {
+	Prime     string   `json:"p"`
+	Threshold int      `json:"t"`
+	Jwe       []string `json:"jwe"`
+}
 
-	primeNode, ok := sssNode["p"].(string)
-	if !ok {
-		return nil, fmt.Errorf("clevis.go/sss: cannot parse provided token, node 'clevis.sss.p'")
+// toConfig converts a given SssPin into the corresponding SssConfig which can be used for encryption
+func (p SssPin) toConfig() (SssConfig, error) {
+	c := SssConfig{
+		Threshold: p.Threshold,
+		Pins:      make(map[string][]json.RawMessage),
 	}
+	for _, jwePin := range p.Jwe {
+		_, pin, err := Parse([]byte(jwePin))
+		if err != nil {
+			return c, err
+		}
+		var cfg interface{}
+		switch pin.Pin {
+		case "tang":
+			cfg, err = pin.Tang.toConfig()
+		case "tpm2":
+			cfg, err = pin.Tpm2.toConfig()
+		case "sss":
+			cfg, err = pin.Sss.toConfig()
+		case "yubikey":
+			cfg, err = pin.Yubikey.toConfig()
+		default:
+			return c, fmt.Errorf("clevis.go: unknown pin '%v'", pin.Pin)
+		}
+		if err != nil {
+			return c, err
+		}
+		cfgBytes, err := json.Marshal(cfg)
+		if err != nil {
+			return c, err
+		}
+		c.Pins[pin.Pin] = append(c.Pins[pin.Pin], cfgBytes)
+	}
+	return c, nil
+}
+
+// decrypt implements Shamir Secret Sharing decryption algorithm
+func (p SssPin) decrypt(msg *jwe.Message) ([]byte, error) {
 	var prime big.Int
-	primeBytes, err := base64.RawURLEncoding.DecodeString(primeNode)
+	primeBytes, err := base64.RawURLEncoding.DecodeString(p.Prime)
 	if err != nil {
 		return nil, err
 	}
@@ -34,24 +68,13 @@ func DecryptSss(msg *jwe.Message, clevisNode map[string]interface{}) ([]byte, er
 		return nil, fmt.Errorf("clevis.go/sss: parameter 'p' expected to be a prime number")
 	}
 
-	thresholdNode, ok := sssNode["t"].(float64)
-	if !ok {
-		return nil, fmt.Errorf("clevis.go/sss: cannot parse provided token, node 'clevis.sss.t'")
-	}
-	threshold := int(thresholdNode)
-
-	jweNode, ok := sssNode["jwe"].([]interface{})
-	if !ok {
-		return nil, fmt.Errorf("clevis.go/sss: 'jwe' property expected to be an array")
+	if len(p.Jwe) < p.Threshold {
+		return nil, fmt.Errorf("clevis.go/sss: number of points %v is smaller than threshold %v", len(p.Jwe), p.Threshold)
 	}
 
-	if len(jweNode) < threshold {
-		return nil, fmt.Errorf("clevis.go/sss: number of points %v is smaller than threshold %v", len(jweNode), threshold)
-	}
-
-	points := make([]point, 0, threshold)
-	for i, j := range jweNode {
-		pointData, err := Decrypt([]byte(j.(string)))
+	points := make([]point, 0, p.Threshold)
+	for i, j := range p.Jwe {
+		pointData, err := Decrypt([]byte(j))
 		if err != nil {
 			fmt.Println(err)
 			continue
@@ -65,7 +88,7 @@ func DecryptSss(msg *jwe.Message, clevisNode map[string]interface{}) ([]byte, er
 
 		points = append(points, point{x, y})
 
-		if len(points) == threshold {
+		if len(points) == p.Threshold {
 			// alright, there is enough points to interpolate the polynomial
 			break
 		}
@@ -80,17 +103,35 @@ func DecryptSss(msg *jwe.Message, clevisNode map[string]interface{}) ([]byte, er
 	return msg.Decrypt(jwa.DIRECT, cek)
 }
 
-type sssConfig struct {
-	Threshold int                          `json:"t"`
-	Pins      map[string][]json.RawMessage `json:"pins"`
+// SssConfig represents the data samir secret sharing needs to perform encryption
+type SssConfig struct {
+	// Threshold is the number of pins required for decryption
+	Threshold int `json:"t"`
+
+	// Pins used to encrypt the key fragments (must be >= Threshold pins provided)
+	Pins map[string][]json.RawMessage `json:"pins"`
 }
 
-func EncryptSss(data []byte, cfg string) ([]byte, error) {
-	var c sssConfig
-	if err := json.Unmarshal([]byte(cfg), &c); err != nil {
+// NewSssConfig parses the given json-format sss config into a SssConfig
+func NewSssConfig(config string) (SssConfig, error) {
+	var c SssConfig
+	if err := json.Unmarshal([]byte(config), &c); err != nil {
+		return c, err
+	}
+	return c, nil
+}
+
+// EncryptSss encrypts a bytestream according to the json-format sss config
+func EncryptSss(data []byte, config string) ([]byte, error) {
+	c, err := NewSssConfig(config)
+	if err != nil {
 		return nil, err
 	}
+	return c.encrypt(data)
+}
 
+// encrypt a bytestream according to the SssConfig
+func (c SssConfig) encrypt(data []byte) ([]byte, error) {
 	if c.Threshold < 1 {
 		return nil, fmt.Errorf("invalid threshold value")
 	}
@@ -153,8 +194,15 @@ func EncryptSss(data []byte, cfg string) ([]byte, error) {
 	primeEncoded := base64.RawURLEncoding.EncodeToString(p.Bytes())
 
 	hdrs := jwe.NewHeaders()
-	sssProps := map[string]interface{}{"t": c.Threshold, "p": primeEncoded, "jwe": pinSecrets}
-	if err := hdrs.Set("clevis", map[string]interface{}{"pin": "sss", "sss": sssProps}); err != nil {
+	clevis := Pin{
+		Pin: "sss",
+		Sss: &SssPin{
+			Threshold: c.Threshold,
+			Prime:     primeEncoded,
+			Jwe:       pinSecrets,
+		},
+	}
+	if err := hdrs.Set("clevis", clevis); err != nil {
 		return nil, err
 	}
 

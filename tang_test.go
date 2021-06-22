@@ -3,6 +3,7 @@ package clevis
 import (
 	"bytes"
 	"crypto"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -11,6 +12,8 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 var tangBinLocation string
@@ -58,7 +61,7 @@ func checkDecryptTang(t *testing.T, h crypto.Hash) {
 	}
 
 	compactForm := encryptedData.Bytes()
-	jsonForm, err := convertToJsonForm(compactForm)
+	jsonForm, err := convertToJSONForm(compactForm)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -244,4 +247,30 @@ func (s *TangServer) TangConfig(h crypto.Hash) (string, error) {
 		return "", err
 	}
 	return fmt.Sprintf(`{"url":"http://localhost:%d", "thp":"%s"}`, s.port, thp), nil
+}
+
+func TestTangToConfig(t *testing.T) {
+	var tests = []struct {
+		pin      TangPin
+		expected TangConfig
+	}{{
+		pin:      TangPin{},
+		expected: TangConfig{},
+	}, {
+		pin: TangPin{
+			Advertisement: json.RawMessage(`{"keys":[{"alg":"ECMR","crv":"P-521","key_ops":["deriveKey"],"kty":"EC","x":"AEFldixpd6xWI1rPigk_i_fW_9SLXh3q3h_CbmRIJ2vmnneWnfylvg37q9_BeSxhLpTQkq580tP-7QiOoNem4ubg","y":"AD8MroFIWQI4nm1rVKOb0ImO0Y7EzPt1HTQfZxagv2IoMez8H_vV7Ra9fU7lJhoe3v-Th6x3-4540FodeIxxiphn"},{"alg":"ES512","crv":"P-521","key_ops":["verify"],"kty":"EC","x":"AFZApUzXzvjVJCZQX1De3LUudI7fiWZcZS3t4F2yrxn0tItCYIZrfygPiCZfV1hVKa3WuH2YMrISZUPrSgi_RN2d","y":"ASEyw-_9xcwNBnvpT7thmAF5qHv9-UPYf38AC7y5QBVejQH_DO1xpKzlTbrHCz0jrMeEir8TyW5ywZIYnqGzPBpn"}]}`),
+			URL:           "http://192.168.4.100:7500",
+		},
+		expected: TangConfig{
+			Thumbprint: "Bp8XjITceWSN_7XFfW7WfJDTomE",
+			URL:        "http://192.168.4.100:7500",
+		},
+	}}
+
+	for _, test := range tests {
+		c, err := test.pin.toConfig()
+
+		assert.NoError(t, err)
+		assert.Equal(t, test.expected, c)
+	}
 }

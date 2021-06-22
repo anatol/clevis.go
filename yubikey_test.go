@@ -6,6 +6,8 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestDecryptYubikey(t *testing.T) {
@@ -26,7 +28,7 @@ func TestDecryptYubikey(t *testing.T) {
 		}
 
 		compactForm := outbuf.Bytes()
-		jsonForm, err := convertToJsonForm(compactForm)
+		jsonForm, err := convertToJSONForm(compactForm)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -84,5 +86,31 @@ func TestEncryptYubikey(t *testing.T) {
 		if string(decrypted2) != inputText {
 			t.Fatalf("unable decrypt data: expected %s, got %s", inputText, string(decrypted2))
 		}
+	}
+}
+
+func TestYubikeyToConfig(t *testing.T) {
+	var tests = []struct {
+		pin      YubikeyPin
+		expected YubikeyConfig
+	}{{
+		pin:      YubikeyPin{},
+		expected: YubikeyConfig{},
+	}, {
+		pin: YubikeyPin{
+			Type:      "type",
+			Challenge: "challenge",
+			Slot:      42,
+		},
+		expected: YubikeyConfig{
+			Slot: 42,
+		},
+	}}
+
+	for _, test := range tests {
+		c, err := test.pin.toConfig()
+
+		assert.NoError(t, err)
+		assert.Equal(t, test.expected, c)
 	}
 }

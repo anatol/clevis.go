@@ -5,7 +5,6 @@ func expandBuffer(buffer []byte, finalLength int) []byte {
 		newBuffer := make([]byte, finalLength-len(buffer), finalLength)
 		newBuffer = append(newBuffer, buffer...)
 		return newBuffer
-	} else {
-		return buffer
 	}
+	return buffer
 }

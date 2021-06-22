@@ -18,35 +18,65 @@ import (
 	"golang.org/x/crypto/pbkdf2"
 )
 
-func DecryptYubikey(msg *jwe.Message, clevisNode map[string]interface{}) ([]byte, error) {
-	yubikeyNode, ok := clevisNode["yubikey"].(map[string]interface{})
-	if !ok {
-		return nil, fmt.Errorf("clevis.go/yubikey: cannot parse provided token, node 'clevis.yubikey'")
-	}
+// YubikeyPin represents the data yubikey needs to perform decryption
+type YubikeyPin struct {
+	Type      string     `json:"type"`
+	Challenge string     `json:"challenge"`
+	Slot      int        `json:"slot"`
+	Kdf       YubikeyKdf `json:"kdf"`
+}
 
-	yubType, ok := yubikeyNode["type"]
-	if !ok {
-		return nil, fmt.Errorf("clevis.go/yubikey: cannot parse provided token, node 'clevis.yubikey.type'")
-	}
+// YubikeyKdf is the Key Derived Function portion of the YubikeyPin
+type YubikeyKdf struct {
+	Type       string `json:"type"`
+	Hash       string `json:"hash"`
+	Iterations int    `json:"iter"`
+	Salt       string `json:"salt"`
+}
 
-	switch yubType {
+// toConfig ctnverts a given YubikeyPin into the corresponding YubikeyConfig which can be used for encryption
+func (p YubikeyPin) toConfig() (YubikeyConfig, error) {
+	c := YubikeyConfig{
+		Slot: p.Slot,
+	}
+	return c, nil
+}
+
+// decrypt decrypts a jwe message bound with Yubikey clevis pin
+func (p YubikeyPin) decrypt(msg *jwe.Message) ([]byte, error) {
+	switch p.Type {
 	case "chalresp":
-		return challengeResponse(msg, yubikeyNode)
+		return challengeResponse(msg, p)
 	default:
-		return nil, fmt.Errorf("clevis.go/yubikey: unknown type %s", yubType)
+		return nil, fmt.Errorf("clevis.go/yubikey: unknown type %s", p.Type)
 	}
 }
 
-type yubikeyConfig struct {
+// YubikeyConfig represents the data yubikey needs to perform encryption
+type YubikeyConfig struct {
 	Slot int `json:"slot"`
 }
 
-func EncryptYubikey(data []byte, cfg string) ([]byte, error) {
-	var c yubikeyConfig
-	if err := json.Unmarshal([]byte(cfg), &c); err != nil {
+// NewYubikeyConfig parses the given json-format yubikey config into a YubikeyConfig
+func NewYubikeyConfig(config string) (YubikeyConfig, error) {
+	var c YubikeyConfig
+	if err := json.Unmarshal([]byte(config), &c); err != nil {
+		return c, err
+	}
+	return c, nil
+}
+
+// EncryptYubikey encrypts a bytestream according to the json-format yubikey config
+func EncryptYubikey(data []byte, config string) ([]byte, error) {
+	c, err := NewYubikeyConfig(config)
+	if err != nil {
 		return nil, err
 	}
+	return c.encrypt(data)
+}
 
+// encrypt a bytestream according to the YubikeyConfig
+func (c YubikeyConfig) encrypt(data []byte) ([]byte, error) {
 	if c.Slot < 1 || c.Slot > 2 {
 		return nil, fmt.Errorf("invalid slot value %d", c.Slot)
 	}
@@ -80,36 +110,32 @@ func EncryptYubikey(data []byte, cfg string) ([]byte, error) {
 	key := pbkdf2.Key(responseBin, salt, iterations, 32, sha256.New)
 
 	hdrs := jwe.NewHeaders()
-	yubikeyProps := map[string]interface{}{}
-	yubikeyProps["slot"] = c.Slot
-	yubikeyProps["type"] = "chalresp"
-	yubikeyProps["challenge"] = base64.RawURLEncoding.EncodeToString(challenge)
-	kdf := map[string]interface{}{}
-	kdf["type"] = "pbkdf2"
-	kdf["hash"] = "sha256"
-	kdf["iter"] = iterations
-	kdf["salt"] = base64.RawURLEncoding.EncodeToString(salt)
-	yubikeyProps["kdf"] = kdf
-	if err := hdrs.Set("clevis", map[string]interface{}{"pin": "yubikey", "yubikey": yubikeyProps}); err != nil {
+
+	clevis := Pin{
+		Pin: "yubikey",
+		Yubikey: &YubikeyPin{
+			Slot:      c.Slot,
+			Type:      "chalresp",
+			Challenge: base64.RawURLEncoding.EncodeToString(challenge),
+			Kdf: YubikeyKdf{
+				Type:       "pbkdf2",
+				Hash:       "sha256",
+				Iterations: iterations,
+				Salt:       base64.RawURLEncoding.EncodeToString(salt),
+			},
+		},
+	}
+	if err := hdrs.Set("clevis", clevis); err != nil {
 		return nil, err
 	}
 
 	return jwe.Encrypt(data, jwa.DIRECT, key, jwa.A256GCM, jwa.NoCompress, jwe.WithProtectedHeaders(hdrs))
 }
 
-func challengeResponse(msg *jwe.Message, node map[string]interface{}) ([]byte, error) {
-	challenge, ok := node["challenge"].(string)
-	if !ok {
-		return nil, fmt.Errorf("clevis.go/yubikey: cannot parse provided token, node 'clevis.yubikey.challenge'")
-	}
+func challengeResponse(msg *jwe.Message, pin YubikeyPin) ([]byte, error) {
+	slot := int(pin.Slot)
 
-	slotNode, ok := node["slot"].(float64)
-	if !ok {
-		return nil, fmt.Errorf("clevis.go/yubikey: cannot parse provided token, node 'clevis.yubikey.slot'")
-	}
-	slot := int(slotNode)
-
-	challengeBin, err := base64.RawURLEncoding.DecodeString(challenge)
+	challengeBin, err := base64.RawURLEncoding.DecodeString(pin.Challenge)
 	if err != nil {
 		return nil, err
 	}
@@ -132,21 +158,16 @@ func challengeResponse(msg *jwe.Message, node map[string]interface{}) ([]byte, e
 		return nil, err
 	}
 
-	kdf, ok := node["kdf"].(map[string]interface{})
-	if !ok {
-		return nil, fmt.Errorf("clevis.go/yubikey: cannot parse provided token, missing node 'clevis.yubikey.kdf'")
-	}
-
 	var key []byte
 
-	switch kdf["type"].(string) {
+	switch pin.Kdf.Type {
 	case "pbkdf2":
-		iter := int(kdf["iter"].(float64))
-		h := hashByName(kdf["hash"].(string))
+		iter := pin.Kdf.Iterations
+		h := hashByName(pin.Kdf.Hash)
 		if h == nil {
-			return nil, fmt.Errorf("clevis.go/yubikey: unknown hash specified at node 'clevis.yubikey.kdf.hash': %s", kdf["hash"].(string))
+			return nil, fmt.Errorf("clevis.go/yubikey: unknown hash specified at node 'clevis.yubikey.kdf.hash': %s", pin.Kdf.Hash)
 		}
-		salt, err := base64.RawURLEncoding.DecodeString(kdf["salt"].(string))
+		salt, err := base64.RawURLEncoding.DecodeString(pin.Kdf.Salt)
 		if err != nil {
 			return nil, err
 		}
@@ -156,7 +177,7 @@ func challengeResponse(msg *jwe.Message, node map[string]interface{}) ([]byte, e
 
 		key = pbkdf2.Key(responseBin, salt, iter, 32, h)
 	default:
-		return nil, fmt.Errorf("clevis.go/yubikey: unknown kdf type specified at node 'clevis.yubikey.kdf.type': %s", kdf["type"].(string))
+		return nil, fmt.Errorf("clevis.go/yubikey: unknown kdf type specified at node 'clevis.yubikey.kdf.type': %s", pin.Kdf.Type)
 	}
 
 	return msg.Decrypt(jwa.DIRECT, key)

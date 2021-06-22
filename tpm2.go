@@ -32,9 +32,8 @@ func openTPM() (io.ReadWriteCloser, error) {
 			return nil, fmt.Errorf("open tcp port %d: device is not a TPM 2.0", useSWEmulatorPort)
 		}
 		return dev, nil
-	} else {
-		return tpm2.OpenTPM("/dev/tpmrm0")
 	}
+	return tpm2.OpenTPM("/dev/tpmrm0")
 }
 
 var defaultSymScheme = &tpm2.SymScheme{
@@ -53,8 +52,29 @@ var defaultECCParams = &tpm2.ECCParams{
 	CurveID:   tpm2.CurveNISTP256,
 }
 
-// DecryptTpm2 decrypts a jwe message bound with TPM2 clevis pin
-func DecryptTpm2(msg *jwe.Message, clevisNode map[string]interface{}) ([]byte, error) {
+// Tpm2Pin represents the data tpm2 needs to perform decryption
+type Tpm2Pin struct {
+	Hash    string `json:"hash,omitempty"`
+	Key     string `json:"key,omitempty"`
+	JwkPub  string `json:"jwk_pub,omitempty"`
+	JwkPriv string `json:"jwk_priv,omitempty"`
+	PcrBank string `json:"pcr_bank,omitempty"`
+	PcrIds  string `json:"pcr_ids,omitempty"`
+}
+
+// ToConfig converts a given Tpm2Pin into the corresponding Tpm2Config which can be used for encryption
+func (p Tpm2Pin) toConfig() (Tpm2Config, error) {
+	c := Tpm2Config{
+		Key:     p.Key,
+		Hash:    p.Hash,
+		PcrBank: p.PcrBank,
+		PcrIds:  p.PcrIds,
+	}
+	return c, nil
+}
+
+// decrypt decrypts a jwe message bound with TPM2 clevis pin
+func (p Tpm2Pin) decrypt(msg *jwe.Message) ([]byte, error) {
 	dev, err := openTPM()
 	if err != nil {
 		return nil, err
@@ -66,28 +86,15 @@ func DecryptTpm2(msg *jwe.Message, clevisNode map[string]interface{}) ([]byte, e
 		return nil, fmt.Errorf("open %s: device is not a TPM 2.0", dev)
 	}
 
-	tpmNode, ok := clevisNode["tpm2"].(map[string]interface{})
-	if !ok {
-		return nil, fmt.Errorf("clevis.go/tpm2: cannot parse clevis.tpm2 property")
-	}
-
 	// tpm2_createprimary -Q -C "$auth" -g "$hash" -G "$key" -c "$TMP"/primary.context
-	hashAlgoName, ok := tpmNode["hash"].(string)
-	if !ok {
-		return nil, fmt.Errorf("clevis.go/tpm2: cannot parse clevis.tpm2.hash property")
-	}
-	hashAlgo := getAlgorithm(hashAlgoName)
+	hashAlgo := getAlgorithm(p.Hash)
 	if hashAlgo.IsNull() {
-		return nil, fmt.Errorf("clevis.go/tpm2: unknown hash algo %v", hashAlgoName)
+		return nil, fmt.Errorf("clevis.go/tpm2: unknown hash algo %v", p.Hash)
 	}
 
-	keyAlgoName, ok := tpmNode["key"].(string)
-	if !ok {
-		return nil, fmt.Errorf("clevis.go/tpm2: cannot parse clevis.tpm2.key property")
-	}
-	keyAlgo := getAlgorithm(keyAlgoName)
+	keyAlgo := getAlgorithm(p.Key)
 	if keyAlgo.IsNull() {
-		return nil, fmt.Errorf("clevis.go/tpm2: unknown key algo %v", keyAlgoName)
+		return nil, fmt.Errorf("clevis.go/tpm2: unknown key algo %v", p.Key)
 	}
 
 	srkTemplate := tpm2.Public{
@@ -106,21 +113,13 @@ func DecryptTpm2(msg *jwe.Message, clevisNode map[string]interface{}) ([]byte, e
 	defer tpm2.FlushContext(dev, srkHandle)
 
 	// tpm2_load -Q -C "$TMP"/primary.context -u "$TMP"/jwk.pub -r "$TMP"/jwk.priv -c "$TMP"/objectHandle.context
-	jwkPriv, ok := tpmNode["jwk_priv"].(string)
-	if !ok {
-		return nil, fmt.Errorf("clevis.go/tpm2: cannot parse clevis.tpm2.jwk_priv property")
-	}
-	jwkPrivBlob, err := base64.RawURLEncoding.DecodeString(jwkPriv)
+	jwkPrivBlob, err := base64.RawURLEncoding.DecodeString(p.JwkPriv)
 	if err != nil {
 		return nil, err
 	}
 	jwkPrivBlob = jwkPrivBlob[2:] // this is marshalled TPM2B_PRIVATE structure, cut 2 bytes from the beginning to get the data
 
-	jwkPub, ok := tpmNode["jwk_pub"].(string)
-	if !ok {
-		return nil, fmt.Errorf("clevis.go/tpm2: cannot parse clevis.tpm2.jwk_pub property")
-	}
-	jwkPubBlob, err := base64.RawURLEncoding.DecodeString(jwkPub)
+	jwkPubBlob, err := base64.RawURLEncoding.DecodeString(p.JwkPub)
 	if err != nil {
 		return nil, err
 	}
@@ -134,24 +133,20 @@ func DecryptTpm2(msg *jwe.Message, clevisNode map[string]interface{}) ([]byte, e
 
 	var unsealed []byte
 
-	if pcrIdsNode, ok := tpmNode["pcr_ids"]; !ok {
+	if p.PcrIds == "" {
 		unsealed, err = tpm2.Unseal(dev, objectHandle, "")
 		if err != nil {
 			return nil, err
 		}
 	} else {
-		pcrIds, err := parseCommaListOfInt(pcrIdsNode.(string))
+		pcrIds, err := parseCommaListOfInt(p.PcrIds)
 		if err != nil {
-			return nil, fmt.Errorf("clevis.go/tpm2: invalid integers in clevis.tpm2.pcr_ids property: %s", pcrIdsNode)
+			return nil, fmt.Errorf("clevis.go/tpm2: invalid integers in clevis.tpm2.pcr_ids property: %s", p.PcrIds)
 		}
 
-		pcrBank, ok := tpmNode["pcr_bank"].(string)
-		if !ok {
-			return nil, fmt.Errorf("clevis.go/tpm2: cannot parse clevis.tpm2.pcr_bank property")
-		}
-		pcrAlgo := getAlgorithm(pcrBank)
+		pcrAlgo := getAlgorithm(p.PcrBank)
 		if pcrAlgo.IsNull() {
-			return nil, fmt.Errorf("clevis.go/tpm2: unknown hash algo for pcr: %v", pcrAlgo)
+			return nil, fmt.Errorf("clevis.go/tpm2: unknown hash algo for pcr: %v", p.PcrBank)
 		}
 
 		sessHandle, _, err := policyPCRSession(dev, pcrIds, pcrAlgo, nil)
@@ -179,25 +174,40 @@ func DecryptTpm2(msg *jwe.Message, clevisNode map[string]interface{}) ([]byte, e
 	return msg.Decrypt(jwa.DIRECT, symmKey.Octets())
 }
 
-type tpm2Config struct {
-	Hash      string `json:"hash"`       // Hash algorithm used in the computation of the object name (default: sha256)
-	Key       string `json:"key"`        // Algorithm type for the generated key (default: ecc)
-	PcrBank   string `json:"pcr_bank"`   // PCR algorithm bank to use for policy (default: sha1)
-	PcrIds    string `json:"pcr_ids"`    // PCR list used for policy. If not present, no policy is used
-	PcrDigest string `json:"pcr_digest"` // Binary PCR hashes encoded in base64. If not present, the hash values are looked up
+// Tpm2Config represents the data tpm2 needs to perform encryption
+type Tpm2Config struct {
+	Hash      string `json:"hash,omitempty"`       // Hash algorithm used in the computation of the object name (default: sha256)
+	Key       string `json:"key,omitempty"`        // Algorithm type for the generated key (default: ecc)
+	PcrBank   string `json:"pcr_bank,omitempty"`   // PCR algorithm bank to use for policy (default: sha1)
+	PcrIds    string `json:"pcr_ids,omitempty"`    // PCR list used for policy. If not present, no policy is used
+	PcrDigest string `json:"pcr_digest,omitempty"` // Binary PCR hashes encoded in base64. If not present, the hash values are looked up
 }
 
-func EncryptTpm2(data []byte, cfg string) ([]byte, error) {
+// NewTpm2Config parses the given json-format tpm2 config into a Tpm2Config
+func NewTpm2Config(config string) (Tpm2Config, error) {
+	var c Tpm2Config
+	if err := json.Unmarshal([]byte(config), &c); err != nil {
+		return c, err
+	}
+	return c, nil
+}
+
+// EncryptTpm2 encrypts a bytestream according to the json-format tpm2 config
+func EncryptTpm2(data []byte, config string) ([]byte, error) {
+	c, err := NewTpm2Config(config)
+	if err != nil {
+		return nil, err
+	}
+	return c.encrypt(data)
+}
+
+// encrypt a bytestream according to the Tpm2Config
+func (c Tpm2Config) encrypt(data []byte) ([]byte, error) {
 	dev, err := openTPM()
 	if err != nil {
 		return nil, err
 	}
 	defer dev.Close()
-
-	var c tpm2Config
-	if err := json.Unmarshal([]byte(cfg), &c); err != nil {
-		return nil, err
-	}
 
 	if c.Hash == "" {
 		c.Hash = "sha256"
@@ -310,17 +320,18 @@ func EncryptTpm2(data []byte, cfg string) ([]byte, error) {
 	if err := hdrs.Set(jwe.ContentEncryptionKey, jwa.A256GCM); err != nil {
 		return nil, err
 	}
-	tpm2Props := map[string]interface{}{
-		"key":      c.Key,
-		"hash":     c.Hash,
-		"jwk_pub":  base64.RawURLEncoding.EncodeToString(publicArea),
-		"jwk_priv": base64.RawURLEncoding.EncodeToString(privateArea),
+	h := Pin{
+		Pin: "tpm2",
+		Tpm2: &Tpm2Pin{
+			Key:     c.Key,
+			Hash:    c.Hash,
+			JwkPub:  base64.RawURLEncoding.EncodeToString(publicArea),
+			JwkPriv: base64.RawURLEncoding.EncodeToString(privateArea),
+			PcrIds:  c.PcrIds,
+			PcrBank: c.PcrBank,
+		},
 	}
-	if c.PcrIds != "" {
-		tpm2Props["pcr_ids"] = c.PcrIds
-		tpm2Props["pcr_bank"] = c.PcrBank
-	}
-	if err := hdrs.Set("clevis", map[string]interface{}{"pin": "tpm2", "tpm2": tpm2Props}); err != nil {
+	if err := hdrs.Set("clevis", h); err != nil {
 		return nil, err
 	}
 
