@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestDecryptYubikey(t *testing.T) {
@@ -23,33 +24,21 @@ func TestDecryptYubikey(t *testing.T) {
 		cmd.Stdin = strings.NewReader(inputText)
 		cmd.Stdout = &outbuf
 		cmd.Stderr = os.Stderr
-		if err := cmd.Run(); err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, cmd.Run())
 
 		compactForm := outbuf.Bytes()
 		jsonForm, err := convertToJSONForm(compactForm)
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 
 		// decrypt compact form using our implementation
 		plaintext1, err := Decrypt(compactForm)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if string(plaintext1) != inputText {
-			t.Fatalf("tpm2 decryption failed: expected '%s', got '%s'", inputText, string(plaintext1))
-		}
+		require.NoError(t, err)
+		require.Equal(t, inputText, string(plaintext1), "compact tpm2 decryption failed")
 
 		// decrypt json form using our implementation
 		plaintext2, err := Decrypt(jsonForm)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if string(plaintext2) != inputText {
-			t.Fatalf("tpm2 decryption failed: expected '%s', got '%s'", inputText, string(plaintext2))
-		}
+		require.NoError(t, err)
+		require.Equal(t, inputText, string(plaintext2), "json tpm2 decryption failed")
 	}
 }
 
@@ -62,30 +51,20 @@ func TestEncryptYubikey(t *testing.T) {
 
 	for _, c := range clevisConfigs {
 		encrypted, err := EncryptYubikey([]byte(inputText), c)
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 
 		decrypted1, err := Decrypt(encrypted)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if string(decrypted1) != inputText {
-			t.Fatalf("unable decrypt data: expected %s, got %s", inputText, string(decrypted1))
-		}
+		require.NoError(t, err)
+		require.Equal(t, inputText, string(decrypted1), "decrypt failed")
 
 		var outbuf bytes.Buffer
 		cmd := exec.Command("./clevis-decrypt-yubikey")
 		cmd.Stdin = bytes.NewReader(encrypted)
 		cmd.Stdout = &outbuf
 		cmd.Stderr = os.Stderr
-		if err := cmd.Run(); err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, cmd.Run())
 		decrypted2 := outbuf.Bytes()
-		if string(decrypted2) != inputText {
-			t.Fatalf("unable decrypt data: expected %s, got %s", inputText, string(decrypted2))
-		}
+		require.Equal(t, inputText, string(decrypted2), "decrypt failed")
 	}
 }
 
@@ -109,7 +88,6 @@ func TestYubikeyToConfig(t *testing.T) {
 
 	for _, test := range tests {
 		c, err := test.pin.toConfig()
-
 		assert.NoError(t, err)
 		assert.Equal(t, test.expected, c)
 	}
