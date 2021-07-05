@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func checkDecryption(t *testing.T, tpmPathEnvvar string) {
@@ -34,33 +35,21 @@ func checkDecryption(t *testing.T, tpmPathEnvvar string) {
 		cmd.Stdout = &outbuf
 		cmd.Stderr = os.Stderr
 
-		if err := cmd.Run(); err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, cmd.Run())
 
 		compactForm := outbuf.Bytes()
 		jsonForm, err := convertToJSONForm(compactForm)
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 
 		// decrypt compact form using our implementation
 		plaintext1, err := Decrypt(compactForm)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if string(plaintext1) != inputText {
-			t.Fatalf("tpm2 decryption failed: expected '%s', got '%s'", inputText, string(plaintext1))
-		}
+		require.NoError(t, err)
+		require.Equal(t, inputText, string(plaintext1), "compact decryption failed")
 
 		// decrypt json form using our implementation
 		plaintext2, err := Decrypt(jsonForm)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if string(plaintext2) != inputText {
-			t.Fatalf("tpm2 decryption failed: expected '%s', got '%s'", inputText, string(plaintext2))
-		}
+		require.NoError(t, err)
+		require.Equal(t, inputText, string(plaintext2), "json decryption failed")
 	}
 }
 
@@ -80,9 +69,7 @@ func convertToJSONForm(compactData []byte) ([]byte, error) {
 
 func TestDecryptTpm2Hardware(t *testing.T) {
 	matches, err := filepath.Glob("/sys/kernel/security/tpm*")
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	if len(matches) == 0 {
 		t.Skip("There is no hardware TPM chip at this system")
@@ -94,9 +81,7 @@ func TestDecryptTpm2Hardware(t *testing.T) {
 
 func TestDecryptTpm2Emulator(t *testing.T) {
 	tpm, err := NewTpmEmulator(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer tpm.Stop()
 
 	useSWEmulatorPort = tpm.port
@@ -115,17 +100,11 @@ func checkEncryption(t *testing.T, tpmPathEnvvar string) {
 	for _, c := range clevisConfigs {
 		// decrypt compact form using our implementation
 		encrypted, err := EncryptTpm2([]byte(inputText), c)
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 
 		decrypted, err := Decrypt(encrypted)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if string(decrypted) != inputText {
-			t.Fatalf("tpm2 decryption failed: expected '%s', got '%s'", inputText, string(decrypted))
-		}
+		require.NoError(t, err)
+		require.Equal(t, inputText, string(decrypted), "decryption failed")
 
 		var outbuf bytes.Buffer
 		cmd := exec.Command("./clevis-decrypt-tpm2")
@@ -136,21 +115,15 @@ func checkEncryption(t *testing.T, tpmPathEnvvar string) {
 		cmd.Stdout = &outbuf
 		cmd.Stderr = os.Stderr
 
-		if err := cmd.Run(); err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, cmd.Run())
 
-		if outbuf.String() != inputText {
-			t.Fatalf("tpm2 decryption failed: expected '%s', got '%s'", inputText, outbuf.String())
-		}
+		require.Equal(t, inputText, outbuf.String(), "decryption failed")
 	}
 }
 
 func TestEncryptTpm2Hardware(t *testing.T) {
 	matches, err := filepath.Glob("/sys/kernel/security/tpm*")
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	if len(matches) == 0 {
 		t.Skip("There is no hardware TPM chip at this system")
@@ -162,9 +135,7 @@ func TestEncryptTpm2Hardware(t *testing.T) {
 
 func TestEncryptTpm2Emulator(t *testing.T) {
 	tpm, err := NewTpmEmulator(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer tpm.Stop()
 
 	useSWEmulatorPort = tpm.port

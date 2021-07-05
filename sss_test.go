@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestDecryptSss(t *testing.T) {
@@ -21,9 +22,7 @@ func TestDecryptSss(t *testing.T) {
 
 	for i := range servers {
 		s, err := NewTangServer(t)
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		servers[i] = s
 		defer s.Stop()
 	}
@@ -35,9 +34,7 @@ func TestDecryptSss(t *testing.T) {
 	var tangConfigs [num]string
 	for i, s := range servers {
 		config, err := s.TangConfig(crypto.SHA256)
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		tangConfigs[i] = config
 	}
 	sssConfig := fmt.Sprintf(`{"t":%d, "pins": {"tang": [%s]}}`, threshold, strings.Join(tangConfigs[:], ","))
@@ -48,32 +45,20 @@ func TestDecryptSss(t *testing.T) {
 	if testing.Verbose() {
 		encryptCmd.Stderr = os.Stderr
 	}
-	if err := encryptCmd.Run(); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, encryptCmd.Run())
 
 	compactForm := encryptedData.Bytes()
 	jsonForm, err := convertToJSONForm(compactForm)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	// decrypt this text using our implementation
 	plaintext1, err := Decrypt(compactForm)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(plaintext1) != inputText {
-		t.Fatalf("sss decryption failed: expected '%s', got '%s'", inputText, string(plaintext1))
-	}
+	require.NoError(t, err)
+	require.Equal(t, inputText, string(plaintext1), "decryption failed")
 
 	plaintext2, err := Decrypt(jsonForm)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(plaintext2) != inputText {
-		t.Fatalf("sss decryption failed: expected '%s', got '%s'", inputText, string(plaintext2))
-	}
+	require.NoError(t, err)
+	require.Equal(t, inputText, string(plaintext2), "decryption failed")
 }
 
 func TestEncryptSss(t *testing.T) {
@@ -84,9 +69,7 @@ func TestEncryptSss(t *testing.T) {
 
 	for i := range servers {
 		s, err := NewTangServer(t)
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		servers[i] = s
 		defer s.Stop()
 	}
@@ -98,24 +81,16 @@ func TestEncryptSss(t *testing.T) {
 	var tangConfigs [num]string
 	for i, s := range servers {
 		config, err := s.TangConfig(crypto.SHA256)
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		tangConfigs[i] = config
 	}
 	sssConfig := fmt.Sprintf(`{"t":%d, "pins": {"tang": [%s]}}`, threshold, strings.Join(tangConfigs[:], ","))
 	encrypted, err := EncryptSss([]byte(inputText), sssConfig)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	decryptedData1, err := Decrypt(encrypted)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(decryptedData1) != inputText {
-		t.Fatalf("sss decryption failed: expected '%s', got '%s'", inputText, string(decryptedData1))
-	}
+	require.NoError(t, err)
+	require.Equal(t, inputText, string(decryptedData1), "decryption failed")
 
 	decryptCmd := exec.Command("clevis-decrypt-sss")
 	decryptCmd.Stdin = bytes.NewReader(encrypted)
@@ -124,13 +99,8 @@ func TestEncryptSss(t *testing.T) {
 	if testing.Verbose() {
 		decryptCmd.Stderr = os.Stderr
 	}
-	if err := decryptCmd.Run(); err != nil {
-		t.Fatal(err)
-	}
-
-	if decryptedData2.String() != inputText {
-		t.Fatalf("sss decryption failed: expected '%s', got '%s'", inputText, decryptedData2.String())
-	}
+	require.NoError(t, decryptCmd.Run())
+	require.Equal(t, inputText, decryptedData2.String(), "decryption failed")
 }
 
 func TestSssToConfig(t *testing.T) {

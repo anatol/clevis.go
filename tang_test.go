@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 var tangBinLocation string
@@ -36,9 +37,7 @@ func init() {
 func checkDecryptTang(t *testing.T, h crypto.Hash) {
 	// start Tang server
 	s, err := NewTangServer(t)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer s.Stop()
 
 	const inputText = "some plaintext"
@@ -46,9 +45,7 @@ func checkDecryptTang(t *testing.T, h crypto.Hash) {
 	// encrypt a text using 'clevis-encrypt-tang' like this:
 	// clevis-encrypt-tang '{"url":"http://localhost", "thp":"1GDW0VlDv95DwPIm5EOqZVZCMeo"}' <<< "hello"
 	config, err := s.TangConfig(h)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	encryptCmd := exec.Command("clevis-encrypt-tang", config)
 	encryptCmd.Stdin = strings.NewReader(inputText)
 	var encryptedData bytes.Buffer
@@ -56,32 +53,20 @@ func checkDecryptTang(t *testing.T, h crypto.Hash) {
 	if testing.Verbose() {
 		encryptCmd.Stderr = os.Stderr
 	}
-	if err := encryptCmd.Run(); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, encryptCmd.Run())
 
 	compactForm := encryptedData.Bytes()
 	jsonForm, err := convertToJSONForm(compactForm)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	// decrypt this text using our implementation
 	plaintext1, err := Decrypt(compactForm)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(plaintext1) != inputText {
-		t.Fatalf("tang decryption failed: expected '%s', got '%s'", inputText, string(plaintext1))
-	}
+	require.NoError(t, err)
+	require.Equal(t, inputText, string(plaintext1), "decryption failed")
 
 	plaintext2, err := Decrypt(jsonForm)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(plaintext2) != inputText {
-		t.Fatalf("tang decryption failed: expected '%s', got '%s'", inputText, string(plaintext2))
-	}
+	require.NoError(t, err)
+	require.Equal(t, inputText, string(plaintext2), "decryption failed")
 }
 
 func TestDecryptTangSHA1(t *testing.T) {
@@ -95,9 +80,7 @@ func TestDecryptTangSHA256(t *testing.T) {
 func checkEncryptTang(t *testing.T, h crypto.Hash) {
 	// start Tang server
 	s, err := NewTangServer(t)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer s.Stop()
 
 	const inputText = "some plaintext"
@@ -105,20 +88,14 @@ func checkEncryptTang(t *testing.T, h crypto.Hash) {
 	// encrypt a text using 'clevis-encrypt-tang' like this:
 	// clevis-encrypt-tang '{"url":"http://localhost", "thp":"1GDW0VlDv95DwPIm5EOqZVZCMeo"}' <<< "hello"
 	config, err := s.TangConfig(h)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	// decrypt this text using our implementation
 	encrypted, err := EncryptTang([]byte(inputText), config)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	decrypted, err := Decrypt(encrypted)
-	if string(decrypted) != inputText {
-		t.Fatalf("decryption decryption failed: expected '%s', got '%s'", inputText, string(decrypted))
-	}
+	require.Equal(t, inputText, string(decrypted), "decryption failed")
 
 	decryptCmd := exec.Command("clevis-decrypt-tang")
 	decryptCmd.Stdin = bytes.NewReader(encrypted)
@@ -127,13 +104,8 @@ func checkEncryptTang(t *testing.T, h crypto.Hash) {
 	if testing.Verbose() {
 		decryptCmd.Stderr = os.Stderr
 	}
-	if err := decryptCmd.Run(); err != nil {
-		t.Fatal(err)
-	}
-
-	if decryptedData.String() != inputText {
-		t.Fatalf("decryption decryption failed: expected '%s', got '%s'", inputText, string(encrypted))
-	}
+	require.NoError(t, decryptCmd.Run())
+	require.Equal(t, inputText, decryptedData.String(), "decryption failed")
 }
 
 func TestEncryptTangSHA256(t *testing.T) {
