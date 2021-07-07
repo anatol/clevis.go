@@ -51,42 +51,42 @@ func (p TangPin) toConfig() (TangConfig, error) {
 	return c, nil
 }
 
-// decrypt a jwe message bound with Tang clevis pin
-func (p TangPin) decrypt(msg *jwe.Message) ([]byte, error) {
+func (p TangPin) prepareDecryptionCtx(ctx jwe.DecryptCtx) error {
 	if p.Advertisement == nil {
-		return nil, fmt.Errorf("cannot parse provided token, node 'clevis.tang.adv'")
+		return fmt.Errorf("cannot parse provided token, node 'clevis.tang.adv'")
 	}
 
 	advNodeBytes, err := json.Marshal(p.Advertisement)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	advertizedKeys, err := jwk.Parse(advNodeBytes)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	if p.URL == "" {
-		return nil, fmt.Errorf("cannot parse provided token, node 'clevis.tang.url'")
+		return fmt.Errorf("cannot parse provided token, node 'clevis.tang.url'")
 	}
 
+	msg := ctx.Message()
 	headers := msg.Recipients()[0].Headers()
 
 	receivedKey, err := performEcmrExhange(p.URL, advertizedKeys, headers.KeyID(), headers.EphemeralPublicKey())
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	if err := headers.Set(jwe.AlgorithmKey, jwa.ECDH_ES); err != nil {
-		return nil, err
+		return err
 	}
 	newEpk, err := jwk.New(receivedKey)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if err := headers.Set(jwe.EphemeralPublicKeyKey, newEpk); err != nil {
-		return nil, err
+		return err
 	}
 	identityKey := ecdsa.PrivateKey{
 		PublicKey: ecdsa.PublicKey{
@@ -95,7 +95,9 @@ func (p TangPin) decrypt(msg *jwe.Message) ([]byte, error) {
 		D: big.NewInt(1),
 	}
 
-	return msg.Decrypt(jwa.ECDH_ES, &identityKey)
+	ctx.SetAlgorithm(jwa.ECDH_ES)
+	ctx.SetKey(&identityKey)
+	return nil
 }
 
 // TangConfig represents the data needed to perform tang-based encryption

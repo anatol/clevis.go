@@ -1,7 +1,6 @@
 package clevis
 
 import (
-	"encoding/json"
 	"fmt"
 
 	"github.com/lestrrat-go/jwx/jwe"
@@ -16,33 +15,31 @@ type Pin struct {
 	Yubikey *YubikeyPin `json:"yubikey,omitempty"`
 }
 
+func init() {
+	jwe.RegisterCustomField("clevis", Pin{})
+}
+
 // Parse the bytestream into a jwe.Message and clevis.Pin
 func Parse(data []byte) (*jwe.Message, *Pin, error) {
-	// Important note: because 'clevis' is in the protected headers, we
-	// CANNOT use this custom field to convert directly to Pin, since
-	// the field ordering in the resulting structure is not guaranteed to
-	// be preserved, and the jwe library will use the serialized version of
-	// the converted type instead of keeping its own unaltered copy!  Using
-	// a json.RawMessage as an intermediate type allows us to keep the
-	// jwe-owned copy unaltered but still allows easy conversion to our own
-	// better struct.
-	jwe.RegisterCustomField("clevis", json.RawMessage{})
-
 	msg, err := jwe.Parse(data)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	n, ok := msg.ProtectedHeaders().Get("clevis")
-	if !ok {
-		return msg, nil, fmt.Errorf("clevis.go: provided message does not contain 'clevis' node")
-	}
-	var pin Pin
-	err = json.Unmarshal(n.(json.RawMessage), &pin)
+	pin, err := pinFromMsg(msg)
 	if err != nil {
 		return msg, nil, err
 	}
-	return msg, &pin, nil
+	return msg, pin, err
+}
+
+func pinFromMsg(msg *jwe.Message) (*Pin, error) {
+	n, ok := msg.ProtectedHeaders().Get("clevis")
+	if !ok {
+		return nil, fmt.Errorf("clevis.go: provided message does not contain 'clevis' node")
+	}
+	pin := n.(Pin)
+	return &pin, nil
 }
 
 // Config represents the structured clevis data which can be used to encrypt a []byte
@@ -101,23 +98,38 @@ func (p Pin) ToConfig() (Config, error) {
 
 // Decrypt decrypts a clevis bound message. The message format can be either compact or JSON.
 func Decrypt(data []byte) ([]byte, error) {
-	msg, p, err := Parse(data)
+	return jwe.Decrypt(data, "", nil, jwe.WithPostParser(clevisParser{}))
+}
+
+type clevisParser struct{}
+
+// Do implements a jwe.PostParser interface which must use the excracted pin config to set up the decryprion algorithm and key
+func (clevisParser) Do(ctx jwe.DecryptCtx) error {
+	p, err := pinFromMsg(ctx.Message())
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	switch p.Pin {
 	case "tang":
-		return p.Tang.decrypt(msg)
+		err = p.Tang.prepareDecryptionCtx(ctx)
 	case "sss":
-		return p.Sss.decrypt(msg)
+		err = p.Sss.prepareDecryptionCtx(ctx)
 	case "tpm2":
-		return p.Tpm2.decrypt(msg)
+		err = p.Tpm2.prepareDecryptionCtx(ctx)
 	case "yubikey":
-		return p.Yubikey.decrypt(msg)
+		err = p.Yubikey.prepareDecryptionCtx(ctx)
 	default:
-		return nil, fmt.Errorf("clevis.go: unknown pin '%v'", p.Pin)
+		err = fmt.Errorf("clevis.go: unknown pin '%v'", p.Pin)
 	}
+	if err != nil {
+		return err
+	}
+
+	if ctx.Algorithm() == "" || ctx.Key() == nil {
+		return fmt.Errorf("clevis.go: %s did not setup the algorithm and key", p.Pin)
+	}
+	return nil
 }
 
 // Encrypt the given data according to the pin type and raw config data given.

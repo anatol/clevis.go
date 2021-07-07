@@ -73,28 +73,27 @@ func (p Tpm2Pin) toConfig() (Tpm2Config, error) {
 	return c, nil
 }
 
-// decrypt decrypts a jwe message bound with TPM2 clevis pin
-func (p Tpm2Pin) decrypt(msg *jwe.Message) ([]byte, error) {
+func (p Tpm2Pin) prepareDecryptionCtx(ctx jwe.DecryptCtx) error {
 	dev, err := openTPM()
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer dev.Close()
 
 	_, err = tpm2.GetManufacturer(dev)
 	if err != nil {
-		return nil, fmt.Errorf("open %s: device is not a TPM 2.0", dev)
+		return fmt.Errorf("open %s: device is not a TPM 2.0", dev)
 	}
 
 	// tpm2_createprimary -Q -C "$auth" -g "$hash" -G "$key" -c "$TMP"/primary.context
 	hashAlgo := getAlgorithm(p.Hash)
 	if hashAlgo.IsNull() {
-		return nil, fmt.Errorf("clevis.go/tpm2: unknown hash algo %v", p.Hash)
+		return fmt.Errorf("clevis.go/tpm2: unknown hash algo %v", p.Hash)
 	}
 
 	keyAlgo := getAlgorithm(p.Key)
 	if keyAlgo.IsNull() {
-		return nil, fmt.Errorf("clevis.go/tpm2: unknown key algo %v", p.Key)
+		return fmt.Errorf("clevis.go/tpm2: unknown key algo %v", p.Key)
 	}
 
 	srkTemplate := tpm2.Public{
@@ -108,26 +107,26 @@ func (p Tpm2Pin) decrypt(msg *jwe.Message) ([]byte, error) {
 
 	srkHandle, _, err := tpm2.CreatePrimary(dev, tpm2.HandleOwner, tpm2.PCRSelection{}, "", "", srkTemplate)
 	if err != nil {
-		return nil, fmt.Errorf("clevis.go/tpm2: can't create primary key: %v", err)
+		return fmt.Errorf("clevis.go/tpm2: can't create primary key: %v", err)
 	}
 	defer tpm2.FlushContext(dev, srkHandle)
 
 	// tpm2_load -Q -C "$TMP"/primary.context -u "$TMP"/jwk.pub -r "$TMP"/jwk.priv -c "$TMP"/objectHandle.context
 	jwkPrivBlob, err := base64.RawURLEncoding.DecodeString(p.JwkPriv)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	jwkPrivBlob = jwkPrivBlob[2:] // this is marshalled TPM2B_PRIVATE structure, cut 2 bytes from the beginning to get the data
 
 	jwkPubBlob, err := base64.RawURLEncoding.DecodeString(p.JwkPub)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	jwkPubBlob = jwkPubBlob[2:] // this is marshalled TPM2B_PUBLIC structure, cut 2 bytes from the beginning to get the data
 
 	objectHandle, _, err := tpm2.Load(dev, srkHandle, "", jwkPubBlob, jwkPrivBlob)
 	if err != nil {
-		return nil, fmt.Errorf("clevis.go/tpm2: unable to load data: %v", err)
+		return fmt.Errorf("clevis.go/tpm2: unable to load data: %v", err)
 	}
 	defer tpm2.FlushContext(dev, objectHandle)
 
@@ -136,22 +135,22 @@ func (p Tpm2Pin) decrypt(msg *jwe.Message) ([]byte, error) {
 	if p.PcrIds == "" {
 		unsealed, err = tpm2.Unseal(dev, objectHandle, "")
 		if err != nil {
-			return nil, err
+			return err
 		}
 	} else {
 		pcrIds, err := parseCommaListOfInt(p.PcrIds)
 		if err != nil {
-			return nil, fmt.Errorf("clevis.go/tpm2: invalid integers in clevis.tpm2.pcr_ids property: %s", p.PcrIds)
+			return fmt.Errorf("clevis.go/tpm2: invalid integers in clevis.tpm2.pcr_ids property: %s", p.PcrIds)
 		}
 
 		pcrAlgo := getAlgorithm(p.PcrBank)
 		if pcrAlgo.IsNull() {
-			return nil, fmt.Errorf("clevis.go/tpm2: unknown hash algo for pcr: %v", p.PcrBank)
+			return fmt.Errorf("clevis.go/tpm2: unknown hash algo for pcr: %v", p.PcrBank)
 		}
 
 		sessHandle, _, err := policyPCRSession(dev, pcrIds, pcrAlgo, nil)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		defer tpm2.FlushContext(dev, sessHandle)
 
@@ -159,19 +158,22 @@ func (p Tpm2Pin) decrypt(msg *jwe.Message) ([]byte, error) {
 		// tpm2_unseal -c "$TMP"/objectHandle.context -p pcr:sha1:0,1
 		unsealed, err = tpm2.UnsealWithSession(dev, sessHandle, objectHandle, "")
 		if err != nil {
-			return nil, fmt.Errorf("unable to unseal data: %v", err)
+			return fmt.Errorf("unable to unseal data: %v", err)
 		}
 	}
 
 	key, err := jwk.ParseKey(unsealed)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	symmKey, ok := key.(jwk.SymmetricKey)
 	if !ok {
-		return nil, fmt.Errorf("clevis.go/tpm2: unsealed key expected to be a symmetric key")
+		return fmt.Errorf("clevis.go/tpm2: unsealed key expected to be a symmetric key")
 	}
-	return msg.Decrypt(jwa.DIRECT, symmKey.Octets())
+
+	ctx.SetAlgorithm(jwa.DIRECT)
+	ctx.SetKey(symmKey.Octets())
+	return nil
 }
 
 // Tpm2Config represents the data tpm2 needs to perform encryption

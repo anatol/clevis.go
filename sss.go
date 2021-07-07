@@ -54,22 +54,21 @@ func (p SssPin) toConfig() (SssConfig, error) {
 	return c, nil
 }
 
-// decrypt implements Shamir Secret Sharing decryption algorithm
-func (p SssPin) decrypt(msg *jwe.Message) ([]byte, error) {
+func (p SssPin) prepareDecryptionCtx(ctx jwe.DecryptCtx) error {
 	var prime big.Int
 	primeBytes, err := base64.RawURLEncoding.DecodeString(p.Prime)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	prime.SetBytes(primeBytes)
 	pointLength := len(primeBytes) // this is a length of numbers we use (p, x, y, resulting secret)
 
 	if !prime.ProbablyPrime(64) {
-		return nil, fmt.Errorf("clevis.go/sss: parameter 'p' expected to be a prime number")
+		return fmt.Errorf("clevis.go/sss: parameter 'p' expected to be a prime number")
 	}
 
 	if len(p.Jwe) < p.Threshold {
-		return nil, fmt.Errorf("clevis.go/sss: number of points %v is smaller than threshold %v", len(p.Jwe), p.Threshold)
+		return fmt.Errorf("clevis.go/sss: number of points %v is smaller than threshold %v", len(p.Jwe), p.Threshold)
 	}
 
 	points := make([]point, 0, p.Threshold)
@@ -80,7 +79,7 @@ func (p SssPin) decrypt(msg *jwe.Message) ([]byte, error) {
 			continue
 		}
 		if len(pointData) != 2*pointLength {
-			return nil, fmt.Errorf("clevis.go/sss: decoded message #%v should have size of two points (x and y). Expected size 2*%v, got %v", i, pointLength, len(pointData))
+			return fmt.Errorf("clevis.go/sss: decoded message #%v should have size of two points (x and y). Expected size 2*%v, got %v", i, pointLength, len(pointData))
 		}
 
 		x := new(big.Int).SetBytes(pointData[:pointLength])
@@ -96,11 +95,13 @@ func (p SssPin) decrypt(msg *jwe.Message) ([]byte, error) {
 
 	cek := lagrangeInterpolation(&prime, points).Bytes()
 	if len(cek) > pointLength {
-		return nil, fmt.Errorf("clevis.go/sss: expected interpolated data length is %v, got %v", pointLength, len(cek))
+		return fmt.Errorf("clevis.go/sss: expected interpolated data length is %v, got %v", pointLength, len(cek))
 	}
 	cek = expandBuffer(cek, pointLength)
 
-	return msg.Decrypt(jwa.DIRECT, cek)
+	ctx.SetAlgorithm(jwa.DIRECT)
+	ctx.SetKey(cek)
+	return nil
 }
 
 // SssConfig represents the data samir secret sharing needs to perform encryption
