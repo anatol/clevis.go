@@ -42,11 +42,10 @@ func (p YubikeyPin) toConfig() (YubikeyConfig, error) {
 	return c, nil
 }
 
-// decrypt decrypts a jwe message bound with Yubikey clevis pin
-func (p YubikeyPin) decrypt(msg *jwe.Message) ([]byte, error) {
+func (p YubikeyPin) recoverKey() ([]byte, error) {
 	switch p.Type {
 	case "chalresp":
-		return challengeResponse(msg, p)
+		return p.challengeResponse()
 	default:
 		return nil, fmt.Errorf("clevis.go/yubikey: unknown type %s", p.Type)
 	}
@@ -132,7 +131,7 @@ func (c YubikeyConfig) encrypt(data []byte) ([]byte, error) {
 	return jwe.Encrypt(data, jwa.DIRECT, key, jwa.A256GCM, jwa.NoCompress, jwe.WithProtectedHeaders(hdrs))
 }
 
-func challengeResponse(msg *jwe.Message, pin YubikeyPin) ([]byte, error) {
+func (pin YubikeyPin) challengeResponse() ([]byte, error) {
 	slot := int(pin.Slot)
 
 	challengeBin, err := base64.RawURLEncoding.DecodeString(pin.Challenge)
@@ -180,7 +179,7 @@ func challengeResponse(msg *jwe.Message, pin YubikeyPin) ([]byte, error) {
 		return nil, fmt.Errorf("clevis.go/yubikey: unknown kdf type specified at node 'clevis.yubikey.kdf.type': %s", pin.Kdf.Type)
 	}
 
-	return msg.Decrypt(jwa.DIRECT, key)
+	return key, nil
 }
 
 func hashByName(name string) func() hash.Hash {

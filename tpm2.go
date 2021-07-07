@@ -73,8 +73,7 @@ func (p Tpm2Pin) toConfig() (Tpm2Config, error) {
 	return c, nil
 }
 
-// decrypt decrypts a jwe message bound with TPM2 clevis pin
-func (p Tpm2Pin) decrypt(msg *jwe.Message) ([]byte, error) {
+func (p Tpm2Pin) recoverKey() ([]byte, error) {
 	dev, err := openTPM()
 	if err != nil {
 		return nil, err
@@ -171,7 +170,8 @@ func (p Tpm2Pin) decrypt(msg *jwe.Message) ([]byte, error) {
 	if !ok {
 		return nil, fmt.Errorf("clevis.go/tpm2: unsealed key expected to be a symmetric key")
 	}
-	return msg.Decrypt(jwa.DIRECT, symmKey.Octets())
+
+	return symmKey.Octets(), nil
 }
 
 // Tpm2Config represents the data tpm2 needs to perform encryption
