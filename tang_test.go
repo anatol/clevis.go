@@ -3,6 +3,8 @@ package clevis
 import (
 	"bytes"
 	"crypto"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -245,4 +247,20 @@ func TestTangToConfig(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, test.expected, c)
 	}
+}
+
+func hexString(s string) []byte {
+	b, err := hex.DecodeString(s)
+	if err != nil {
+		panic(err)
+	}
+	return b
+}
+
+func TestConcatKDF(t *testing.T) {
+	require.Equal(t, concatKDF(sha256.New(), []byte("input"), nil, 48), hexString("858b192fa2ed4395e2bf88dd8d5770d67dc284ee539f12da8bceaa45d06ebae0700f1ab918a5f0413b8140f9940d6955"))
+	require.Equal(t, concatKDF(sha256.New(), []byte("input"), nil, 64), hexString("858b192fa2ed4395e2bf88dd8d5770d67dc284ee539f12da8bceaa45d06ebae0700f1ab918a5f0413b8140f9940d6955f3467fd6672cce1024c5b1effccc0f61"))
+
+	// https://tools.ietf.org/html/rfc7518#appendix-C
+	require.Equal(t, concatKDF(sha256.New(), hexString("9e56d91d817135d372834283bf84269cfb316ea3da806a48f6daa7798cfe90c4"), hexString("000000074131323847434d00000005416c69636500000003426f6200000080"), 16), hexString("56aa8deaf8236d205c2228cd71a7101a"))
 }

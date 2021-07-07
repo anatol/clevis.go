@@ -6,9 +6,12 @@ import (
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"hash"
 	"io"
 	"math/big"
 	"net/http"
@@ -51,6 +54,46 @@ func (p TangPin) toConfig() (TangConfig, error) {
 	return c, nil
 }
 
+// NIST SP 800-56 Concatenation Key Derivation Function (see section 5.8.1).
+func concatKDF(hash hash.Hash, z, s1 []byte, kdLen int) []byte {
+	counterBytes := make([]byte, 4)
+	var k []byte
+	for counter := uint32(1); len(k) < kdLen; counter++ {
+		binary.BigEndian.PutUint32(counterBytes, counter)
+		hash.Reset()
+		hash.Write(counterBytes)
+		hash.Write(z)
+		hash.Write(s1)
+		k = hash.Sum(k)
+	}
+	return k[:kdLen]
+}
+
+func keySize(alg jwa.ContentEncryptionAlgorithm) (int, error) {
+	switch alg {
+	case jwa.A128GCM:
+		return 16, nil
+	case jwa.A192GCM:
+		return 24, nil
+	case jwa.A256GCM:
+		return 32, nil
+	case jwa.A128CBC_HS256:
+		return 16, nil
+	case jwa.A192CBC_HS384:
+		return 24, nil
+	case jwa.A256CBC_HS512:
+		return 32, nil
+	default:
+		return 0, fmt.Errorf("failed to determine key size for content cipher: invalid algorithm (%s)", alg)
+	}
+}
+
+func ndata(src []byte) []byte {
+	buf := make([]byte, 4)
+	binary.BigEndian.PutUint32(buf, uint32(len(src)))
+	return append(buf, src...)
+}
+
 // decrypt a jwe message bound with Tang clevis pin
 func (p TangPin) decrypt(msg *jwe.Message) ([]byte, error) {
 	if p.Advertisement == nil {
@@ -71,31 +114,36 @@ func (p TangPin) decrypt(msg *jwe.Message) ([]byte, error) {
 		return nil, fmt.Errorf("cannot parse provided token, node 'clevis.tang.url'")
 	}
 
-	headers := msg.Recipients()[0].Headers()
+	headers := msg.ProtectedHeaders()
 
 	receivedKey, err := performEcmrExhange(p.URL, advertizedKeys, headers.KeyID(), headers.EphemeralPublicKey())
 	if err != nil {
 		return nil, err
 	}
 
-	if err := headers.Set(jwe.AlgorithmKey, jwa.ECDH_ES); err != nil {
-		return nil, err
-	}
-	newEpk, err := jwk.New(receivedKey)
+	keysize, err := keySize(headers.ContentEncryption())
 	if err != nil {
 		return nil, err
 	}
-	if err := headers.Set(jwe.EphemeralPublicKeyKey, newEpk); err != nil {
+
+	bytesSize := divRoundUp(receivedKey.Curve.Params().BitSize, 8)
+	zBytes := expandBuffer(receivedKey.X.Bytes(), bytesSize)
+
+	pubinfo := make([]byte, 4)
+	binary.BigEndian.PutUint32(pubinfo, uint32(keysize*8))
+
+	var data []byte
+	data = append(data, ndata([]byte(headers.ContentEncryption().String()))...)
+	data = append(data, ndata(headers.AgreementPartyUInfo())...)
+	data = append(data, ndata(headers.AgreementPartyVInfo())...)
+	data = append(data, pubinfo...)
+
+	key := concatKDF(sha256.New(), zBytes, data, keysize)
+
+	if err := msg.Recipients()[0].Headers().Set(jwe.AlgorithmKey, jwa.DIRECT); err != nil {
 		return nil, err
 	}
-	identityKey := ecdsa.PrivateKey{
-		PublicKey: ecdsa.PublicKey{
-			Curve: receivedKey.Curve,
-		},
-		D: big.NewInt(1),
-	}
-
-	return msg.Decrypt(jwa.ECDH_ES, &identityKey)
+	return msg.Decrypt(jwa.DIRECT, key)
 }
 
 // TangConfig represents the data needed to perform tang-based encryption
