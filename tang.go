@@ -94,8 +94,7 @@ func ndata(src []byte) []byte {
 	return append(buf, src...)
 }
 
-// decrypt a jwe message bound with Tang clevis pin
-func (p TangPin) decrypt(msg *jwe.Message) ([]byte, error) {
+func (p TangPin) recoverKey(msg *jwe.Message) ([]byte, error) {
 	if p.Advertisement == nil {
 		return nil, fmt.Errorf("cannot parse provided token, node 'clevis.tang.adv'")
 	}
@@ -143,7 +142,8 @@ func (p TangPin) decrypt(msg *jwe.Message) ([]byte, error) {
 	if err := msg.Recipients()[0].Headers().Set(jwe.AlgorithmKey, jwa.DIRECT); err != nil {
 		return nil, err
 	}
-	return msg.Decrypt(jwa.DIRECT, key)
+
+	return key, nil
 }
 
 // TangConfig represents the data needed to perform tang-based encryption
