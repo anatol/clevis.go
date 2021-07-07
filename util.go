@@ -8,3 +8,8 @@ func expandBuffer(buffer []byte, finalLength int) []byte {
 	}
 	return buffer
 }
+
+// divRoundUp divides num to divisor with rounding up the result to the next integer value
+func divRoundUp(num, divisor int) int {
+	return (num + divisor - 1) / divisor
+}
