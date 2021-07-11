@@ -42,7 +42,7 @@ func (p TangPin) toConfig() (TangConfig, error) {
 		}
 		verifyKey := filterKey(keys, jwk.KeyOpVerify)
 		if verifyKey == nil {
-			return c, fmt.Errorf("No verify key in the stored advertisement")
+			return c, fmt.Errorf("no verify key in the stored advertisement")
 		}
 		thpBytes, err := verifyKey.Thumbprint(crypto.SHA1)
 		if err != nil {

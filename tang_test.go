@@ -97,6 +97,7 @@ func checkEncryptTang(t *testing.T, h crypto.Hash) {
 	require.NoError(t, err)
 
 	decrypted, err := Decrypt(encrypted)
+	require.NoError(t, err)
 	require.Equal(t, inputText, string(decrypted), "decryption failed")
 
 	decryptCmd := exec.Command("clevis-decrypt-tang")
