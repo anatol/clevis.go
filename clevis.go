@@ -103,28 +103,12 @@ func Decrypt(data []byte) ([]byte, error) {
 }
 
 func recoverClevisKey(ctx jwe.DecryptCtx) error {
-	p, err := pinFromMsg(ctx.Message())
+	msg := ctx.Message()
+	p, err := pinFromMsg(msg)
 	if err != nil {
 		return err
 	}
-	return p.recoverKey(ctx)
-}
-
-func (p Pin) recoverKey(ctx jwe.DecryptCtx) error {
-	var err error
-	var key []byte
-	switch p.Pin {
-	case "tang":
-		key, err = p.Tang.recoverKey(ctx.Message())
-	case "sss":
-		key, err = p.Sss.recoverKey()
-	case "tpm2":
-		key, err = p.Tpm2.recoverKey()
-	case "yubikey":
-		key, err = p.Yubikey.recoverKey()
-	default:
-		err = fmt.Errorf("clevis.go: unknown pin '%v'", p.Pin)
-	}
+	key, err := p.recoverKey(msg)
 	if err != nil {
 		return err
 	}
@@ -132,6 +116,22 @@ func (p Pin) recoverKey(ctx jwe.DecryptCtx) error {
 	ctx.SetAlgorithm(jwa.DIRECT)
 	ctx.SetKey(key)
 	return nil
+
+}
+
+func (p Pin) recoverKey(msg *jwe.Message) ([]byte, error) {
+	switch p.Pin {
+	case "tang":
+		return p.Tang.recoverKey(msg)
+	case "sss":
+		return p.Sss.recoverKey()
+	case "tpm2":
+		return p.Tpm2.recoverKey()
+	case "yubikey":
+		return p.Yubikey.recoverKey()
+	default:
+		return nil, fmt.Errorf("clevis.go: unknown pin '%v'", p.Pin)
+	}
 }
 
 // Encrypt the given data according to the pin type and raw config data given.
