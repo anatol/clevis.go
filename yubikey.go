@@ -131,10 +131,10 @@ func (c YubikeyConfig) encrypt(data []byte) ([]byte, error) {
 	return jwe.Encrypt(data, jwa.DIRECT, key, jwa.A256GCM, jwa.NoCompress, jwe.WithProtectedHeaders(hdrs))
 }
 
-func (pin YubikeyPin) challengeResponse() ([]byte, error) {
-	slot := int(pin.Slot)
+func (p YubikeyPin) challengeResponse() ([]byte, error) {
+	slot := int(p.Slot)
 
-	challengeBin, err := base64.RawURLEncoding.DecodeString(pin.Challenge)
+	challengeBin, err := base64.RawURLEncoding.DecodeString(p.Challenge)
 	if err != nil {
 		return nil, err
 	}
@@ -159,14 +159,14 @@ func (pin YubikeyPin) challengeResponse() ([]byte, error) {
 
 	var key []byte
 
-	switch pin.Kdf.Type {
+	switch p.Kdf.Type {
 	case "pbkdf2":
-		iter := pin.Kdf.Iterations
-		h := hashByName(pin.Kdf.Hash)
+		iter := p.Kdf.Iterations
+		h := hashByName(p.Kdf.Hash)
 		if h == nil {
-			return nil, fmt.Errorf("clevis.go/yubikey: unknown hash specified at node 'clevis.yubikey.kdf.hash': %s", pin.Kdf.Hash)
+			return nil, fmt.Errorf("clevis.go/yubikey: unknown hash specified at node 'clevis.yubikey.kdf.hash': %s", p.Kdf.Hash)
 		}
-		salt, err := base64.RawURLEncoding.DecodeString(pin.Kdf.Salt)
+		salt, err := base64.RawURLEncoding.DecodeString(p.Kdf.Salt)
 		if err != nil {
 			return nil, err
 		}
@@ -176,7 +176,7 @@ func (pin YubikeyPin) challengeResponse() ([]byte, error) {
 
 		key = pbkdf2.Key(responseBin, salt, iter, 32, h)
 	default:
-		return nil, fmt.Errorf("clevis.go/yubikey: unknown kdf type specified at node 'clevis.yubikey.kdf.type': %s", pin.Kdf.Type)
+		return nil, fmt.Errorf("clevis.go/yubikey: unknown kdf type specified at node 'clevis.yubikey.kdf.type': %s", p.Kdf.Type)
 	}
 
 	return key, nil
