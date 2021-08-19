@@ -132,8 +132,6 @@ func (c YubikeyConfig) encrypt(data []byte) ([]byte, error) {
 }
 
 func (p YubikeyPin) challengeResponse() ([]byte, error) {
-	slot := int(p.Slot)
-
 	challengeBin, err := base64.RawURLEncoding.DecodeString(p.Challenge)
 	if err != nil {
 		return nil, err
@@ -143,7 +141,7 @@ func (p YubikeyPin) challengeResponse() ([]byte, error) {
 	}
 
 	var outBuffer, errBuffer bytes.Buffer
-	cmd := exec.Command("ykchalresp", "-i-", "-"+strconv.Itoa(slot))
+	cmd := exec.Command("ykchalresp", "-i-", "-"+strconv.Itoa(p.Slot))
 	cmd.Stdin = bytes.NewReader(challengeBin)
 	cmd.Stdout = &outBuffer
 	cmd.Stderr = &errBuffer
