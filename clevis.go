@@ -37,7 +37,7 @@ func Parse(data []byte) (*jwe.Message, *Pin, error) {
 func pinFromMsg(msg *jwe.Message) (*Pin, error) {
 	n, ok := msg.ProtectedHeaders().Get("clevis")
 	if !ok {
-		return nil, fmt.Errorf("clevis.go: provided message does not contain 'clevis' node")
+		return nil, fmt.Errorf("provided message does not contain 'clevis' node")
 	}
 	pin := n.(Pin)
 	return &pin, nil
@@ -92,7 +92,7 @@ func (p Pin) ToConfig() (Config, error) {
 		}
 		c.Yubikey = &cfg
 	default:
-		return c, fmt.Errorf("clevis.go: unknown pin '%v'", p.Pin)
+		return c, fmt.Errorf("unknown pin '%v'", p.Pin)
 	}
 	return c, nil
 }
@@ -130,7 +130,7 @@ func (p Pin) recoverKey(msg *jwe.Message) ([]byte, error) {
 	case "yubikey":
 		return p.Yubikey.recoverKey()
 	default:
-		return nil, fmt.Errorf("clevis.go: unknown pin '%v'", p.Pin)
+		return nil, fmt.Errorf("unknown pin '%v'", p.Pin)
 	}
 }
 
@@ -180,7 +180,7 @@ func (c Config) Encrypt(data []byte) ([]byte, error) {
 	case "yubikey":
 		return c.Yubikey.encrypt(data)
 	default:
-		return nil, fmt.Errorf("clevis.go: unknown pin '%v'", c.Pin)
+		return nil, fmt.Errorf("unknown pin '%v'", c.Pin)
 	}
 }
 

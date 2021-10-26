@@ -88,12 +88,12 @@ func (p Tpm2Pin) recoverKey() ([]byte, error) {
 	// tpm2_createprimary -Q -C "$auth" -g "$hash" -G "$key" -c "$TMP"/primary.context
 	hashAlgo := getAlgorithm(p.Hash)
 	if hashAlgo.IsNull() {
-		return nil, fmt.Errorf("clevis.go/tpm2: unknown hash algo %v", p.Hash)
+		return nil, fmt.Errorf("unknown hash algo %v", p.Hash)
 	}
 
 	keyAlgo := getAlgorithm(p.Key)
 	if keyAlgo.IsNull() {
-		return nil, fmt.Errorf("clevis.go/tpm2: unknown key algo %v", p.Key)
+		return nil, fmt.Errorf("unknown key algo %v", p.Key)
 	}
 
 	srkTemplate := tpm2.Public{
@@ -107,7 +107,7 @@ func (p Tpm2Pin) recoverKey() ([]byte, error) {
 
 	srkHandle, _, err := tpm2.CreatePrimary(dev, tpm2.HandleOwner, tpm2.PCRSelection{}, "", "", srkTemplate)
 	if err != nil {
-		return nil, fmt.Errorf("clevis.go/tpm2: can't create primary key: %v", err)
+		return nil, fmt.Errorf("can't create primary key: %v", err)
 	}
 	defer tpm2.FlushContext(dev, srkHandle)
 
@@ -126,7 +126,7 @@ func (p Tpm2Pin) recoverKey() ([]byte, error) {
 
 	objectHandle, _, err := tpm2.Load(dev, srkHandle, "", jwkPubBlob, jwkPrivBlob)
 	if err != nil {
-		return nil, fmt.Errorf("clevis.go/tpm2: unable to load data: %v", err)
+		return nil, fmt.Errorf("unable to load data: %v", err)
 	}
 	defer tpm2.FlushContext(dev, objectHandle)
 
@@ -140,12 +140,12 @@ func (p Tpm2Pin) recoverKey() ([]byte, error) {
 	} else {
 		pcrIds, err := parseCommaListOfInt(p.PcrIds)
 		if err != nil {
-			return nil, fmt.Errorf("clevis.go/tpm2: invalid integers in clevis.tpm2.pcr_ids property: %s", p.PcrIds)
+			return nil, fmt.Errorf("invalid integers in clevis.tpm2.pcr_ids property: %s", p.PcrIds)
 		}
 
 		pcrAlgo := getAlgorithm(p.PcrBank)
 		if pcrAlgo.IsNull() {
-			return nil, fmt.Errorf("clevis.go/tpm2: unknown hash algo for pcr: %v", p.PcrBank)
+			return nil, fmt.Errorf("unknown hash algo for pcr: %v", p.PcrBank)
 		}
 
 		sessHandle, _, err := policyPCRSession(dev, pcrIds, pcrAlgo, nil)
@@ -168,7 +168,7 @@ func (p Tpm2Pin) recoverKey() ([]byte, error) {
 	}
 	symmKey, ok := key.(jwk.SymmetricKey)
 	if !ok {
-		return nil, fmt.Errorf("clevis.go/tpm2: unsealed key expected to be a symmetric key")
+		return nil, fmt.Errorf("unsealed key expected to be a symmetric key")
 	}
 
 	return symmKey.Octets(), nil
@@ -221,12 +221,12 @@ func (c Tpm2Config) encrypt(data []byte) ([]byte, error) {
 
 	hashAlgo := getAlgorithm(c.Hash)
 	if hashAlgo.IsNull() {
-		return nil, fmt.Errorf("clevis.go/tpm2: unknown hash algo %v", c.Hash)
+		return nil, fmt.Errorf("unknown hash algo %v", c.Hash)
 	}
 
 	keyAlgo := getAlgorithm(c.Key)
 	if keyAlgo.IsNull() {
-		return nil, fmt.Errorf("clevis.go/tpm2: unknown key algo %v", c.Key)
+		return nil, fmt.Errorf("unknown key algo %v", c.Key)
 	}
 
 	srkTemplate := tpm2.Public{
@@ -240,7 +240,7 @@ func (c Tpm2Config) encrypt(data []byte) ([]byte, error) {
 
 	srkHandle, _, err := tpm2.CreatePrimary(dev, tpm2.HandleOwner, tpm2.PCRSelection{}, "", "", srkTemplate)
 	if err != nil {
-		return nil, fmt.Errorf("clevis.go/tpm2: can't create primary key: %v", err)
+		return nil, fmt.Errorf("can't create primary key: %v", err)
 	}
 	defer tpm2.FlushContext(dev, srkHandle)
 
@@ -272,7 +272,7 @@ func (c Tpm2Config) encrypt(data []byte) ([]byte, error) {
 	if c.PcrIds != "" {
 		pcrs, err := parseCommaListOfInt(c.PcrIds)
 		if err != nil {
-			return nil, fmt.Errorf("clevis.go/tpm2: invalid integers in clevis.tpm2.pcr_ids property: %s", c.PcrIds)
+			return nil, fmt.Errorf("invalid integers in clevis.tpm2.pcr_ids property: %s", c.PcrIds)
 		}
 
 		var expectedDigest []byte
@@ -285,7 +285,7 @@ func (c Tpm2Config) encrypt(data []byte) ([]byte, error) {
 
 		pcrAlgo := getAlgorithm(c.PcrBank)
 		if pcrAlgo.IsNull() {
-			return nil, fmt.Errorf("clevis.go/tpm2: unknown hash algo for pcr: %v", pcrAlgo)
+			return nil, fmt.Errorf("unknown hash algo for pcr: %v", pcrAlgo)
 		}
 
 		var sessHandle tpmutil.Handle

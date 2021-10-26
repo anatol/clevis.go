@@ -40,7 +40,7 @@ func (p SssPin) toConfig() (SssConfig, error) {
 		case "yubikey":
 			cfg, err = pin.Yubikey.toConfig()
 		default:
-			return c, fmt.Errorf("clevis.go: unknown pin '%v'", pin.Pin)
+			return c, fmt.Errorf("unknown pin '%v'", pin.Pin)
 		}
 		if err != nil {
 			return c, err
@@ -64,11 +64,11 @@ func (p SssPin) recoverKey() ([]byte, error) {
 	pointLength := len(primeBytes) // this is a length of numbers we use (p, x, y, resulting secret)
 
 	if !prime.ProbablyPrime(64) {
-		return nil, fmt.Errorf("clevis.go/sss: parameter 'p' expected to be a prime number")
+		return nil, fmt.Errorf("parameter 'p' expected to be a prime number")
 	}
 
 	if len(p.Jwe) < p.Threshold {
-		return nil, fmt.Errorf("clevis.go/sss: number of points %v is smaller than threshold %v", len(p.Jwe), p.Threshold)
+		return nil, fmt.Errorf("number of points %v is smaller than threshold %v", len(p.Jwe), p.Threshold)
 	}
 
 	points := make([]point, 0, p.Threshold)
@@ -79,7 +79,7 @@ func (p SssPin) recoverKey() ([]byte, error) {
 			continue
 		}
 		if len(pointData) != 2*pointLength {
-			return nil, fmt.Errorf("clevis.go/sss: decoded message #%v should have size of two points (x and y). Expected size 2*%v, got %v", i, pointLength, len(pointData))
+			return nil, fmt.Errorf("decoded message #%v should have size of two points (x and y). Expected size 2*%v, got %v", i, pointLength, len(pointData))
 		}
 
 		x := new(big.Int).SetBytes(pointData[:pointLength])
@@ -95,7 +95,7 @@ func (p SssPin) recoverKey() ([]byte, error) {
 
 	cek := lagrangeInterpolation(&prime, points).Bytes()
 	if len(cek) > pointLength {
-		return nil, fmt.Errorf("clevis.go/sss: expected interpolated data length is %v, got %v", pointLength, len(cek))
+		return nil, fmt.Errorf("expected interpolated data length is %v, got %v", pointLength, len(cek))
 	}
 	cek = expandBuffer(cek, pointLength)
 

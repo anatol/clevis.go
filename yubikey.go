@@ -47,7 +47,7 @@ func (p YubikeyPin) recoverKey() ([]byte, error) {
 	case "chalresp":
 		return p.challengeResponse()
 	default:
-		return nil, fmt.Errorf("clevis.go/yubikey: unknown type %s", p.Type)
+		return nil, fmt.Errorf("unknown type %s", p.Type)
 	}
 }
 
@@ -162,7 +162,7 @@ func (p YubikeyPin) challengeResponse() ([]byte, error) {
 		iter := p.Kdf.Iterations
 		h := hashByName(p.Kdf.Hash)
 		if h == nil {
-			return nil, fmt.Errorf("clevis.go/yubikey: unknown hash specified at node 'clevis.yubikey.kdf.hash': %s", p.Kdf.Hash)
+			return nil, fmt.Errorf("unknown hash specified at node 'clevis.yubikey.kdf.hash': %s", p.Kdf.Hash)
 		}
 		salt, err := base64.RawURLEncoding.DecodeString(p.Kdf.Salt)
 		if err != nil {
@@ -174,7 +174,7 @@ func (p YubikeyPin) challengeResponse() ([]byte, error) {
 
 		key = pbkdf2.Key(responseBin, salt, iter, 32, h)
 	default:
-		return nil, fmt.Errorf("clevis.go/yubikey: unknown kdf type specified at node 'clevis.yubikey.kdf.type': %s", p.Kdf.Type)
+		return nil, fmt.Errorf("unknown kdf type specified at node 'clevis.yubikey.kdf.type': %s", p.Kdf.Type)
 	}
 
 	return key, nil
