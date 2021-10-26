@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestParse(t *testing.T) {
@@ -45,13 +45,13 @@ func TestParse(t *testing.T) {
 
 	for _, test := range tests {
 		msg, pin, err := Parse(test.raw)
-		assert.NoError(t, err)
-		assert.Equal(t, pin.Pin, test.expected.Pin)
-		assert.Equal(t, pin.Tang, test.expected.Tang)
-		assert.Equal(t, pin.Sss, test.expected.Sss)
-		assert.Equal(t, pin.Tpm2, test.expected.Tpm2)
-		assert.Equal(t, pin.Yubikey, test.expected.Yubikey)
-		assert.NotNil(t, msg)
+		require.NoError(t, err)
+		require.Equal(t, pin.Pin, test.expected.Pin)
+		require.Equal(t, pin.Tang, test.expected.Tang)
+		require.Equal(t, pin.Sss, test.expected.Sss)
+		require.Equal(t, pin.Tpm2, test.expected.Tpm2)
+		require.Equal(t, pin.Yubikey, test.expected.Yubikey)
+		require.NotNil(t, msg)
 	}
 }
 
@@ -75,13 +75,13 @@ func TestParseFailure(t *testing.T) {
 
 	for _, test := range tests {
 		msg, pin, err := Parse(test.raw)
-		assert.Error(t, err)
+		require.Error(t, err)
 		if test.expectedMsg {
-			assert.NotNil(t, msg)
+			require.NotNil(t, msg)
 		} else {
-			assert.Nil(t, msg)
+			require.Nil(t, msg)
 		}
-		assert.Nil(t, pin)
+		require.Nil(t, pin)
 	}
 }
 
@@ -129,9 +129,9 @@ func TestToConfig(t *testing.T) {
 
 	for _, test := range tests {
 		c, err := test.pin.ToConfig()
-		assert.NoError(t, err)
-		assert.Equal(t, test.expected.Pin, c.Pin)
-		assert.Equal(t, test.expected.Tang, c.Tang)
-		assert.Equal(t, test.expected.Yubikey, c.Yubikey)
+		require.NoError(t, err)
+		require.Equal(t, test.expected.Pin, c.Pin)
+		require.Equal(t, test.expected.Tang, c.Tang)
+		require.Equal(t, test.expected.Yubikey, c.Yubikey)
 	}
 }

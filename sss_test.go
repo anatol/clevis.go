@@ -10,7 +10,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -134,7 +133,7 @@ func TestSssToConfig(t *testing.T) {
 	for _, test := range tests {
 		c, err := test.pin.toConfig()
 
-		assert.NoError(t, err)
-		assert.Equal(t, test.expected, c)
+		require.NoError(t, err)
+		require.Equal(t, test.expected, c)
 	}
 }
