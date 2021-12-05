@@ -40,10 +40,11 @@ func (p TangPin) toConfig() (TangConfig, error) {
 		if err != nil {
 			return c, err
 		}
-		verifyKey := filterKey(keys, jwk.KeyOpVerify)
-		if verifyKey == nil {
+		verifyKeys := filterKeys(keys, jwk.KeyOpVerify)
+		if verifyKeys == nil {
 			return c, fmt.Errorf("no verify key in the stored advertisement")
 		}
+		verifyKey := verifyKeys[0] // TODO: find out what verify key is used by default
 		thpBytes, err := verifyKey.Thumbprint(crypto.SHA1)
 		if err != nil {
 			return c, err
@@ -221,17 +222,19 @@ func (c TangConfig) encrypt(data []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	verifyKey := filterKey(keys, jwk.KeyOpVerify)
-	if verifyKey == nil {
+	verifyKeys := filterKeys(keys, jwk.KeyOpVerify)
+	if verifyKeys == nil {
 		return nil, fmt.Errorf("advertisement is missing signatures")
 	}
 
-	if _, err = jws.Verify(msgContent, jwa.SignatureAlgorithm(verifyKey.Algorithm()), verifyKey); err != nil {
-		return nil, err
+	for _, key := range verifyKeys {
+		if _, err = jws.Verify(msgContent, jwa.SignatureAlgorithm(key.Algorithm()), key); err != nil {
+			return nil, err
+		}
 	}
 
 	if thumbprint != "" {
-		verified, err := verifyThumbprint(verifyKey, thumbprint)
+		verified, err := verifyThumbprint(verifyKeys, thumbprint)
 		if err != nil {
 			return nil, err
 		}
@@ -240,10 +243,12 @@ func (c TangConfig) encrypt(data []byte) ([]byte, error) {
 		}
 	}
 
-	exchangeKey := filterKey(keys, jwk.KeyOpDeriveKey)
-	if exchangeKey == nil {
+	exchangeKeys := filterKeys(keys, jwk.KeyOpDeriveKey)
+	if exchangeKeys == nil {
 		return nil, fmt.Errorf("no exchange keys found")
 	}
+
+	exchangeKey := exchangeKeys[0] // TODO: clarify what derive key is used by clevis
 
 	// we are going to modify the key but 'adv' node should have original keys
 	exchangeKey, err = exchangeKey.Clone()
@@ -293,28 +298,32 @@ func (c TangConfig) encrypt(data []byte) ([]byte, error) {
 	return jwe.Encrypt(data, jwa.ECDH_ES, exchangeKey, jwa.A256GCM, jwa.NoCompress, jwe.WithProtectedHeaders(hdrs))
 }
 
-func verifyThumbprint(verifyKey jwk.Key, thumbprint string) (bool, error) {
+func verifyThumbprint(verifyKeys []jwk.Key, thumbprint string) (bool, error) {
 	thpBytes, err := base64.RawURLEncoding.DecodeString(thumbprint)
 	if err != nil {
 		return false, err
 	}
 
-	for _, a := range thpAlgos {
-		thp, err := verifyKey.Thumbprint(a)
-		if err != nil {
-			return false, err
-		}
-		if bytes.Equal(thpBytes, thp) {
-			return true, nil
+	for _, verifyKey := range verifyKeys {
+		for _, a := range thpAlgos {
+			thp, err := verifyKey.Thumbprint(a)
+			if err != nil {
+				return false, err
+			}
+			if bytes.Equal(thpBytes, thp) {
+				return true, nil
+			}
 		}
 	}
 
 	return false, nil
 }
 
-func filterKey(set jwk.Set, op jwk.KeyOperation) jwk.Key {
+func filterKeys(set jwk.Set, op jwk.KeyOperation) []jwk.Key {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	var keys []jwk.Key
 
 	for iter := set.Iterate(ctx); iter.Next(ctx); {
 		pair := iter.Pair()
@@ -322,12 +331,12 @@ func filterKey(set jwk.Set, op jwk.KeyOperation) jwk.Key {
 
 		for _, o := range key.KeyOps() {
 			if o == op {
-				return key
+				keys = append(keys, key)
 			}
 		}
 	}
 
-	return nil
+	return keys
 }
 
 func performEcmrExhange(url string, advertizedKeys jwk.Set, serverKeyID string, e jwk.Key) (*ecdsa.PublicKey, error) {
