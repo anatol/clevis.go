@@ -20,7 +20,8 @@ func checkDecryption(t *testing.T, tpmPathEnvvar string) {
 
 	clevisConfigs := []string{
 		`{}`,
-		`{"pcr_bank":"sha1","pcr_ids":"0,1"}`,
+		`{"pcr_bank":"sha1"}`,
+		`{"pcr_bank":"sha256","pcr_ids":"0,1"}`,
 		`{"key":"rsa"}`,
 	}
 
@@ -92,7 +93,8 @@ func checkEncryption(t *testing.T, tpmPathEnvvar string) {
 
 	clevisConfigs := []string{
 		`{}`,
-		`{"pcr_bank":"sha1","pcr_ids":"0,1"}`,
+		`{"pcr_bank":"sha1"}`,
+		`{"pcr_bank":"sha256","pcr_ids":"0,1"}`,
 		`{"key":"rsa"}`,
 	}
 
