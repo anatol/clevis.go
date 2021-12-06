@@ -45,7 +45,7 @@ func (p TangPin) toConfig() (TangConfig, error) {
 			return c, fmt.Errorf("no verify key in the stored advertisement")
 		}
 		verifyKey := verifyKeys[0] // TODO: find out what verify key is used by default
-		thpBytes, err := verifyKey.Thumbprint(crypto.SHA1)
+		thpBytes, err := verifyKey.Thumbprint(defaultThpAlgo)
 		if err != nil {
 			return c, err
 		}
@@ -168,10 +168,17 @@ func NewTangConfig(config string) (TangConfig, error) {
 	return c, nil
 }
 
-var thpAlgos = []crypto.Hash{
-	crypto.SHA256,
-	crypto.SHA1,
-}
+var (
+	thpAlgos = []crypto.Hash{
+		crypto.SHA256, /* S256 */
+		crypto.SHA1,   /* S1 */
+		crypto.SHA224, /* S224 */
+		crypto.SHA384, /* S384 */
+		crypto.SHA512, /* S512 */
+	}
+
+	defaultThpAlgo = crypto.SHA256
+)
 
 // EncryptTang encrypts a bytestream according to the json-format tang config
 func EncryptTang(data []byte, config string) ([]byte, error) {
@@ -263,7 +270,7 @@ func (c TangConfig) encrypt(data []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	thp, err := exchangeKey.Thumbprint(crypto.SHA256)
+	thp, err := exchangeKey.Thumbprint(defaultThpAlgo)
 	if err != nil {
 		return nil, err
 	}

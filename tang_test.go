@@ -236,7 +236,7 @@ func TestTangToConfig(t *testing.T) {
 			URL:           "http://192.168.4.100:7500",
 		},
 		expected: TangConfig{
-			Thumbprint: "Bp8XjITceWSN_7XFfW7WfJDTomE",
+			Thumbprint: "qV4G6dFF-aHWLGyAlphlZ09VVjtA7Rz5EdUSPOaaIcA",
 			URL:        "http://192.168.4.100:7500",
 		},
 	}}

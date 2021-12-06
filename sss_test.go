@@ -123,9 +123,9 @@ func TestSssToConfig(t *testing.T) {
 		expected: SssConfig{
 			Threshold: 2,
 			Pins: map[string][]json.RawMessage{
-				"tang": {json.RawMessage(`{"url":"http://192.168.4.100:7500","thp":"Bp8XjITceWSN_7XFfW7WfJDTomE"}`)},
+				"tang": {json.RawMessage(`{"url":"http://192.168.4.100:7500","thp":"qV4G6dFF-aHWLGyAlphlZ09VVjtA7Rz5EdUSPOaaIcA"}`)},
 				"tpm2": {json.RawMessage(`{"hash":"sha256","key":"ecc"}`)},
-				"sss":  {json.RawMessage(`{"t":1,"pins":{"tang":[{"url":"http://192.168.4.100:7500","thp":"Bp8XjITceWSN_7XFfW7WfJDTomE"}]}}`)},
+				"sss":  {json.RawMessage(`{"t":1,"pins":{"tang":[{"url":"http://192.168.4.100:7500","thp":"qV4G6dFF-aHWLGyAlphlZ09VVjtA7Rz5EdUSPOaaIcA"}]}}`)},
 			},
 		},
 	}}
