@@ -54,12 +54,12 @@ var defaultECCParams = &tpm2.ECCParams{
 
 // Tpm2Pin represents the data tpm2 needs to perform decryption
 type Tpm2Pin struct {
-	Hash    string `json:"hash,omitempty"`
-	Key     string `json:"key,omitempty"`
-	JwkPub  string `json:"jwk_pub,omitempty"`
-	JwkPriv string `json:"jwk_priv,omitempty"`
-	PcrBank string `json:"pcr_bank,omitempty"`
-	PcrIds  string `json:"pcr_ids,omitempty"`
+	Hash    string      `json:"hash,omitempty"`
+	Key     string      `json:"key,omitempty"`
+	JwkPub  string      `json:"jwk_pub,omitempty"`
+	JwkPriv string      `json:"jwk_priv,omitempty"`
+	PcrBank string      `json:"pcr_bank,omitempty"`
+	PcrIds  interface{} `json:"pcr_ids,omitempty"`
 }
 
 // ToConfig converts a given Tpm2Pin into the corresponding Tpm2Config which can be used for encryption
@@ -132,23 +132,22 @@ func (p Tpm2Pin) recoverKey() ([]byte, error) {
 
 	var unsealed []byte
 
-	if p.PcrIds == "" {
+	pcrs, err := parsePcrIds(p.PcrIds)
+	if err != nil {
+		return nil, err
+	}
+	if len(pcrs) == 0 {
 		unsealed, err = tpm2.Unseal(dev, objectHandle, "")
 		if err != nil {
 			return nil, err
 		}
 	} else {
-		pcrIds, err := parseCommaListOfInt(p.PcrIds)
-		if err != nil {
-			return nil, fmt.Errorf("invalid integers in clevis.tpm2.pcr_ids property: %s", p.PcrIds)
-		}
-
 		pcrAlgo := getAlgorithm(p.PcrBank)
 		if pcrAlgo.IsNull() {
 			return nil, fmt.Errorf("unknown hash algo for pcr: %v", p.PcrBank)
 		}
 
-		sessHandle, _, err := policyPCRSession(dev, pcrIds, pcrAlgo, nil)
+		sessHandle, _, err := policyPCRSession(dev, pcrs, pcrAlgo, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -176,11 +175,11 @@ func (p Tpm2Pin) recoverKey() ([]byte, error) {
 
 // Tpm2Config represents the data tpm2 needs to perform encryption
 type Tpm2Config struct {
-	Hash      string `json:"hash,omitempty"`       // Hash algorithm used in the computation of the object name (default: sha256)
-	Key       string `json:"key,omitempty"`        // Algorithm type for the generated key (default: ecc)
-	PcrBank   string `json:"pcr_bank,omitempty"`   // PCR algorithm bank to use for policy (default: sha1)
-	PcrIds    string `json:"pcr_ids,omitempty"`    // PCR list used for policy. If not present, no policy is used
-	PcrDigest string `json:"pcr_digest,omitempty"` // Binary PCR hashes encoded in base64. If not present, the hash values are looked up
+	Hash      string      `json:"hash,omitempty"`       // Hash algorithm used in the computation of the object name (default: sha256)
+	Key       string      `json:"key,omitempty"`        // Algorithm type for the generated key (default: ecc)
+	PcrBank   string      `json:"pcr_bank,omitempty"`   // PCR algorithm bank to use for policy (default: sha1)
+	PcrIds    interface{} `json:"pcr_ids,omitempty"`    // PCR list used for policy. If not present, no policy is used
+	PcrDigest string      `json:"pcr_digest,omitempty"` // Binary PCR hashes encoded in base64. If not present, the hash values are looked up
 }
 
 // NewTpm2Config parses the given json-format tpm2 config into a Tpm2Config
@@ -188,6 +187,11 @@ func NewTpm2Config(config string) (Tpm2Config, error) {
 	var c Tpm2Config
 	if err := json.Unmarshal([]byte(config), &c); err != nil {
 		return c, err
+	}
+	var err error
+	c.PcrIds, err = parsePcrIds(c.PcrIds) // normalize pcrs array
+	if err != nil {
+		return Tpm2Config{}, err
 	}
 	return c, nil
 }
@@ -269,12 +273,11 @@ func (c Tpm2Config) encrypt(data []byte) ([]byte, error) {
 	}
 
 	var policy []byte
-	if c.PcrIds != "" {
-		pcrs, err := parseCommaListOfInt(c.PcrIds)
-		if err != nil {
-			return nil, fmt.Errorf("invalid integers in clevis.tpm2.pcr_ids property: %s", c.PcrIds)
-		}
-
+	pcrs, err := parsePcrIds(c.PcrIds)
+	if err != nil {
+		return nil, err
+	}
+	if len(pcrs) != 0 {
 		var expectedDigest []byte
 		if c.PcrDigest != "" {
 			expectedDigest, err = base64.RawURLEncoding.DecodeString(c.PcrDigest)
@@ -384,18 +387,48 @@ func policyPCRSession(dev io.ReadWriteCloser, pcrs []int, algo tpm2.Algorithm, e
 	return sessHandle, policy, nil
 }
 
-func parseCommaListOfInt(intList string) ([]int, error) {
-	pcrsSplice := strings.Split(intList, ",")
-	pcrIds := make([]int, len(pcrsSplice))
+func parsePcrIds(pcrList interface{}) ([]int, error) {
+	switch pcrList := pcrList.(type) {
+	case nil:
+		return nil, nil
+	case string:
+		pcrsSplice := strings.Split(pcrList, ",")
+		pcrIds := make([]int, len(pcrsSplice))
 
-	for i, s := range pcrsSplice {
-		var err error
-		pcrIds[i], err = strconv.Atoi(s)
-		if err != nil {
-			return nil, err
+		for i, s := range pcrsSplice {
+			var err error
+			s = strings.TrimSpace(s)
+			pcrIds[i], err = strconv.Atoi(s)
+			if err != nil {
+				return nil, err
+			}
 		}
+		return pcrIds, nil
+	case []int:
+		return pcrList, nil
+	case []interface{}:
+		res := make([]int, len(pcrList))
+		for i, v := range pcrList {
+			switch v := v.(type) {
+			case float64:
+				res[i] = int(v)
+			case int:
+				res[i] = v
+			case string:
+				var err error
+				v = strings.TrimSpace(v)
+				res[i], err = strconv.Atoi(v)
+				if err != nil {
+					return nil, err
+				}
+			default:
+				return nil, fmt.Errorf("unknown type of element %+v", v)
+			}
+		}
+		return res, nil
+	default:
+		return nil, fmt.Errorf("unknown pcr_ids type: %+v", pcrList)
 	}
-	return pcrIds, nil
 }
 
 func getAlgorithm(name string) tpm2.Algorithm {

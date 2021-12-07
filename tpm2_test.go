@@ -246,3 +246,25 @@ func TestTpm2ToConfig(t *testing.T) {
 		require.Equal(t, test.expected, c)
 	}
 }
+
+func TestParseConfig(t *testing.T) {
+	configs := []struct {
+		in   string
+		pcrs []int
+	}{
+		{`{}`, nil},
+		{`{"pcr_bank":"sha1"}`, nil},
+		{`{"pcr_bank":"sha256","pcr_ids":"0,1"}`, []int{0, 1}},
+		{`{"pcr_bank":"sha256","pcr_ids":"0,   1"}`, []int{0, 1}},
+		{`{"pcr_bank":"sha256","pcr_ids":[2,6]}`, []int{2, 6}},
+		{`{"pcr_bank":"sha256","pcr_ids":["2","5"]}`, []int{2, 5}},
+		{`{"key":"rsa","pcr_ids":[]}`, []int{}},
+		{`{"key":"rsa"}`, nil},
+	}
+
+	for _, data := range configs {
+		c, err := NewTpm2Config(data.in)
+		require.NoError(t, err)
+		require.Equal(t, data.pcrs, c.PcrIds)
+	}
+}
