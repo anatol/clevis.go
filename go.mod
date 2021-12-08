@@ -6,7 +6,7 @@ require (
 	github.com/goccy/go-json v0.8.1 // indirect
 	github.com/google/go-tpm v0.3.3-0.20210409082102-d3310770bfec
 	github.com/lestrrat-go/backoff/v2 v2.0.8 // indirect
-	github.com/lestrrat-go/jwx v1.2.12
+	github.com/lestrrat-go/jwx v1.2.13
 	github.com/stretchr/testify v1.7.0
 	golang.org/x/crypto v0.0.0-20211202192323-5770296d904e
 	golang.org/x/sys v0.0.0-20211205182925-97ca703d548d // indirect
