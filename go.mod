@@ -3,6 +3,7 @@ module github.com/anatol/clevis.go
 go 1.17
 
 require (
+	github.com/anatol/tang.go v0.0.0-20211208011427-4f66a321d8ef
 	github.com/goccy/go-json v0.8.1 // indirect
 	github.com/google/go-tpm v0.3.3-0.20210409082102-d3310770bfec
 	github.com/lestrrat-go/backoff/v2 v2.0.8 // indirect

@@ -17,10 +17,10 @@ func TestDecryptSss(t *testing.T) {
 	const num = 5
 	const threshold = 3
 
-	var servers [num]*TangServer
+	var servers [num]*tangServer
 
 	for i := range servers {
-		s, err := NewTangServer(t)
+		s, err := newTangServer(t.TempDir())
 		require.NoError(t, err)
 		servers[i] = s
 		defer s.Stop()
@@ -64,10 +64,10 @@ func TestEncryptSss(t *testing.T) {
 	const num = 5
 	const threshold = 3
 
-	var servers [num]*TangServer
+	var servers [num]*tangServer
 
 	for i := range servers {
-		s, err := NewTangServer(t)
+		s, err := newTangServer(t.TempDir())
 		require.NoError(t, err)
 		servers[i] = s
 		defer s.Stop()

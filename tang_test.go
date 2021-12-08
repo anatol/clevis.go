@@ -7,14 +7,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
-	"log"
-	"net"
 	"os"
 	"os/exec"
 	"strings"
 	"testing"
 
+	"github.com/anatol/tang.go"
 	"github.com/stretchr/testify/require"
 )
 
@@ -35,9 +33,61 @@ func init() {
 	}
 }
 
+type tangServer struct {
+	*tang.NativeServer
+}
+
+func newTangServer(keysDir string) (*tangServer, error) {
+	// generate server keys
+	err := exec.Command(tangBinLocation+"tangd-keygen", keysDir, "sign", "exchange").Run()
+	if err != nil {
+		return nil, err
+	}
+
+	s, err := tang.NewNativeServer(keysDir, 0)
+	if err != nil {
+		return nil, err
+	}
+
+	return &tangServer{s}, nil
+}
+
+// hash algorithm names for 'jose jwk thp'
+var algos = map[crypto.Hash]string{
+	crypto.SHA1:   "S1",
+	crypto.SHA256: "S256",
+}
+
+func (s *tangServer) thumbprint(h crypto.Hash) (string, error) {
+	algo, ok := algos[h]
+	if !ok {
+		return "", fmt.Errorf("do not know how to calculate thumbprint for hash %s", h.String())
+	}
+
+	thpCmd := exec.Command("jose", "jwk", "thp", "-a", algo, "-i", s.KeysDir+"/sign.jwk")
+	var thpOut bytes.Buffer
+	thpCmd.Stdout = &thpOut
+	if testing.Verbose() {
+		thpCmd.Stderr = os.Stderr
+	}
+	if err := thpCmd.Run(); err != nil {
+		return "", err
+	}
+
+	return thpOut.String(), nil
+}
+
+func (s *tangServer) TangConfig(h crypto.Hash) (string, error) {
+	thp, err := s.thumbprint(h)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(`{"url":"http://localhost:%d", "thp":"%s"}`, s.Port, thp), nil
+}
+
 func checkDecryptTang(t *testing.T, h crypto.Hash) {
 	// start Tang server
-	s, err := NewTangServer(t)
+	s, err := newTangServer(t.TempDir())
 	require.NoError(t, err)
 	defer s.Stop()
 
@@ -80,7 +130,7 @@ func TestDecryptTangSHA256(t *testing.T) {
 
 func checkEncryptTang(t *testing.T, h crypto.Hash) {
 	// start Tang server
-	s, err := NewTangServer(t)
+	s, err := newTangServer(t.TempDir())
 	require.NoError(t, err)
 	defer s.Stop()
 
@@ -112,115 +162,6 @@ func checkEncryptTang(t *testing.T, h crypto.Hash) {
 
 func TestEncryptTangSHA256(t *testing.T) {
 	checkEncryptTang(t, crypto.SHA256)
-}
-
-type TangServer struct {
-	keysDir  string
-	listener net.Listener
-	quit     chan interface{}
-	port     int
-}
-
-func NewTangServer(t *testing.T) (*TangServer, error) {
-	// generate server keys
-	keysDir := t.TempDir()
-	err := exec.Command(tangBinLocation+"tangd-keygen", keysDir, "sign", "exchange").Run()
-	if err != nil {
-		return nil, err
-	}
-
-	l, err := net.Listen("tcp", ":0")
-	if err != nil {
-		return nil, err
-	}
-
-	s := &TangServer{
-		keysDir:  keysDir,
-		listener: l,
-		port:     l.Addr().(*net.TCPAddr).Port,
-		quit:     make(chan interface{}),
-	}
-	go s.serve()
-	return s, nil
-}
-
-func (s *TangServer) Stop() {
-	close(s.quit)
-	_ = s.listener.Close()
-}
-
-func (s *TangServer) serve() {
-	for {
-		conn, err := s.listener.Accept()
-		if err != nil {
-			select {
-			case <-s.quit:
-				return
-			default:
-				log.Println("accept error", err)
-			}
-		} else {
-			s.handleConection(conn)
-			if err := conn.Close(); err != nil {
-				log.Print(err)
-			}
-		}
-	}
-}
-
-func (s *TangServer) handleConection(conn net.Conn) {
-	buf := make([]byte, 4096)
-	n, err := conn.Read(buf)
-	if err != nil && err != io.EOF {
-		log.Println("read error", err)
-		return
-	}
-	if n == 0 {
-		return
-	}
-
-	tangCmd := exec.Command(tangBinLocation+"tangd", s.keysDir)
-	tangCmd.Stdin = bytes.NewReader(buf[:n])
-	tangCmd.Stdout = conn
-	if testing.Verbose() {
-		tangCmd.Stderr = os.Stderr
-	}
-	if err := tangCmd.Run(); err != nil {
-		log.Println(err)
-	}
-}
-
-// hash algorithm names for 'jose jwk thp'
-var algos = map[crypto.Hash]string{
-	crypto.SHA1:   "S1",
-	crypto.SHA256: "S256",
-}
-
-func (s *TangServer) thumbprint(h crypto.Hash) (string, error) {
-	algo, ok := algos[h]
-	if !ok {
-		return "", fmt.Errorf("do not know how to calculate thumbprint for hash %s", h.String())
-	}
-
-	thpCmd := exec.Command("jose", "jwk", "thp", "-a", algo, "-i", s.keysDir+"/sign.jwk")
-	var thpOut bytes.Buffer
-	thpCmd.Stdout = &thpOut
-	if testing.Verbose() {
-		thpCmd.Stderr = os.Stderr
-	}
-	if err := thpCmd.Run(); err != nil {
-		return "", err
-	}
-
-	return thpOut.String(), nil
-}
-
-func (s *TangServer) TangConfig(h crypto.Hash) (string, error) {
-	thp, err := s.thumbprint(h)
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf(`{"url":"http://localhost:%d", "thp":"%s"}`, s.port, thp), nil
 }
 
 func TestTangToConfig(t *testing.T) {
