@@ -1,0 +1,152 @@
+#!/bin/bash -e
+# vim: set tabstop=8 shiftwidth=4 softtabstop=4 expandtab smarttab colorcolumn=80:
+#
+# Copyright (c) 2017 Red Hat, Inc.
+# Author: Nathaniel McCallum <npmccallum@redhat.com>
+# Copyright (c) 2021 Anatol Pomazau <anatol.pomozov@gmail.com>
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#
+
+SUMMARY="Encrypts using a Reverse Tang binding server policy"
+
+if [ "$1" == "--summary" ]; then
+    echo "$SUMMARY"
+    exit 0
+fi
+
+if [ -t 0 ]; then
+    exec >&2
+    echo
+    echo "Usage: clevis encrypt reverse-tang CONFIG [-y] < PLAINTEXT > JWE"
+    echo
+    echo "$SUMMARY"
+    echo
+    echo "  -y              Use this option for skipping the advertisement"
+    echo "                  trust check. This can be useful in automated"
+    echo "                  deployments"
+    echo
+    echo "This command uses the following configuration properties:"
+    echo
+    echo "  port: <number>  TCP port to listent incoming requests from Tang"
+    echo
+    echo "  thp: <string>   The thumbprint of a trusted signing key"
+    echo
+    echo "  adv: <string>   A filename containing a trusted advertisement"
+    echo "  adv: <object>   A trusted advertisement (raw JSON)"
+    echo
+    echo "Obtaining the thumbprint of a trusted signing key is easy. If you"
+    echo "have access to the Tang server's database directory, simply do:"
+    echo
+    echo "    $ jose jwk thp -i \$DBDIR/\$SIG.jwk "
+    echo
+    exit 2
+fi
+
+if ! cfg="$(jose fmt -j- -Oo- <<< "$1" 2>/dev/null)"; then
+    echo "Configuration is malformed!" >&2
+    exit 1
+fi
+
+CLEVIS_DEFAULT_THP_ALG=S256       # SHA-256.
+CLEVIS_ALTERNATIVE_THP_ALGS=S1    # SHA-1.
+REVERSE_TANG_DEFAULT_PORT=8609
+
+trust=
+[ -n "${2}" ] && [ "${2}" == "-y" ] && trust=yes
+
+if ! port="$(jose fmt -j- -Og port -Io- <<< "$cfg")"; then
+    port=$REVERSE_TANG_DEFAULT_PORT
+fi
+
+thp="$(jose fmt -j- -Og thp -Su- <<< "$cfg")" || true
+
+### Get the advertisement
+if jws="$(jose fmt -j- -g adv -Oo- <<< "$cfg")"; then
+    thp="${thp:-any}"
+elif jws="$(jose fmt -j- -g adv -Su- <<< "$cfg")"; then
+    if ! [ -f "$jws" ]; then
+        echo "Advertisement file '$jws' not found!" >&2
+        exit 1
+    fi
+
+    if ! jws="$(jose fmt --json="${jws}" -Oo- 2>/dev/null)"; then
+        echo "Advertisement file '$jws' is malformed!" >&2
+        exit 1
+    fi
+
+    thp="${thp:-any}"
+fi
+
+if ! jwks="$(jose fmt --json="${jws}" -Og payload -SyOg keys \
+             -AUo- 2>/dev/null)"; then
+    echo "Advertisement is malformed!" >&2
+    exit 1
+fi
+
+### Check advertisement validity
+ver="$(jose jwk use -i- -r -u verify -o- <<< "$jwks")"
+if ! jose jws ver -i "$jws" -k- -a <<< "$ver"; then
+    echo "Advertisement is missing signatures!" >&2
+    exit 1
+fi
+
+### Check advertisement trust
+if [ -z "${trust}" ]; then
+    if [ -z "$thp" ]; then
+        echo "The advertisement contains the following signing keys:" >&2
+        echo >&2
+        jose jwk thp -i- -a "${CLEVIS_DEFAULT_THP_ALG}" <<< "$ver" >&2
+        echo >&2
+        read -r -p "Do you wish to trust these keys? [ynYN] " ans < /dev/tty
+        [[ "$ans" =~ ^[yY]$ ]] || exit 1
+
+    elif [ "$thp" != "any" ] && \
+        ! jose jwk thp -i- -f "${thp}" -a "${CLEVIS_DEFAULT_THP_ALG}" \
+          -o /dev/null <<< "$ver"; then
+        # Thumbprint of trusted JWK did not match the signature. Let's check
+        # alternative thumbprints generated with clevis supported hash
+        # algorithms to be sure.
+        for alg in ${CLEVIS_ALTERNATIVE_THP_ALGS}; do
+            srv="$(jose jwk thp -i- -f "${thp}" -a "${alg}" <<< "${ver}")" \
+                   && break
+        done
+        if [ -z "${srv}" ]; then
+            echo "Trusted JWK '$thp' did not sign the advertisement!" >&2
+            exit 1
+        fi
+    fi
+fi
+
+### Perform encryption
+if ! enc="$(jose jwk use -i- -r -u deriveKey -o- <<< "$jwks")"; then
+    echo "Key derivation key not available!" >&2
+    exit 1
+fi
+
+jose fmt -j "$enc" -Og keys -A || enc="{\"keys\":[$enc]}"
+
+if ! jwk="$(jose fmt -j- -Og keys -Af- <<< "$enc")"; then
+    echo "No exchange keys found!" >&2
+    exit 1
+fi
+
+jwk="$(jose fmt -j- -Od key_ops -o- <<< "$jwk")"
+jwk="$(jose fmt -j- -Od alg -o- <<< "$jwk")"
+kid="$(jose jwk thp -i- -a "${CLEVIS_DEFAULT_THP_ALG}"  <<< "$jwk")"
+jwe='{"protected":{"alg":"ECDH-ES","enc":"A256GCM","clevis":{"pin":"reverse-tang","reverse-tang":{}}}}'
+jwe="$(jose fmt -j "$jwe" -g protected -q "$kid" -s kid -UUo-)"
+jwe="$(jose fmt -j "$jwe" -g protected -g clevis -g reverse-tang -j $port -Is port -UUUUo-)"
+jwe="$(jose fmt -j "$jwe" -g protected -g clevis -g reverse-tang -j- -s adv -UUUUo- <<< "$jwks")"
+exec jose jwe enc -i- -k- -I- -c < <(echo -n "$jwe$jwk"; /bin/cat)
