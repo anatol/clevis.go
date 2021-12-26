@@ -55,7 +55,10 @@ func newTangServer(keysDir string) (*tangServer, error) {
 // hash algorithm names for 'jose jwk thp'
 var algos = map[crypto.Hash]string{
 	crypto.SHA1:   "S1",
+	crypto.SHA224: "S224",
 	crypto.SHA256: "S256",
+	crypto.SHA384: "S384",
+	crypto.SHA512: "S512",
 }
 
 func (s *tangServer) thumbprint(h crypto.Hash) (string, error) {
