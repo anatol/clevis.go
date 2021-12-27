@@ -236,11 +236,11 @@ func (c TangConfig) encrypt(data []byte) ([]byte, error) {
 	}
 
 	if thumbprint != "" {
-		verified, err := verifyThumbprint(verifyKeys, thumbprint)
+		k, err := findByThumbprint(verifyKeys, thumbprint)
 		if err != nil {
 			return nil, err
 		}
-		if !verified {
+		if k == nil {
 			return nil, fmt.Errorf("trusted JWK '%s' did not sign the advertisement", thumbprint)
 		}
 	}
@@ -300,25 +300,25 @@ func (c TangConfig) encrypt(data []byte) ([]byte, error) {
 	return jwe.Encrypt(data, jwa.ECDH_ES, exchangeKey, jwa.A256GCM, jwa.NoCompress, jwe.WithProtectedHeaders(hdrs))
 }
 
-func verifyThumbprint(verifyKeys []jwk.Key, thumbprint string) (bool, error) {
+func findByThumbprint(keys []jwk.Key, thumbprint string) (jwk.Key, error) {
 	thpBytes, err := base64.RawURLEncoding.DecodeString(thumbprint)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 
-	for _, verifyKey := range verifyKeys {
+	for _, k := range keys {
 		for _, a := range thpAlgos {
-			thp, err := verifyKey.Thumbprint(a)
+			thp, err := k.Thumbprint(a)
 			if err != nil {
-				return false, err
+				return nil, err
 			}
 			if bytes.Equal(thpBytes, thp) {
-				return true, nil
+				return k, nil
 			}
 		}
 	}
 
-	return false, nil
+	return nil, nil
 }
 
 func filterKeys(set jwk.Set, op jwk.KeyOperation) []jwk.Key {
