@@ -100,12 +100,7 @@ func (p TangPin) recoverKey(msg *jwe.Message) ([]byte, error) {
 		return nil, fmt.Errorf("cannot parse provided token, node 'clevis.tang.adv'")
 	}
 
-	advNodeBytes, err := json.Marshal(p.Advertisement)
-	if err != nil {
-		return nil, err
-	}
-
-	advertizedKeys, err := jwk.Parse(advNodeBytes)
+	advertizedKeys, err := jwk.Parse(p.Advertisement)
 	if err != nil {
 		return nil, err
 	}
