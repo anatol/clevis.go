@@ -23,13 +23,13 @@ import (
 	"github.com/lestrrat-go/jwx/jws"
 )
 
-// TangPin  represents the data tang needs to perform decryption
+// TangPin represents the data tang needs to perform decryption
 type TangPin struct {
 	Advertisement json.RawMessage `json:"adv"`
 	URL           string          `json:"url"`
 }
 
-// toConfig converts a given TangPin to the corresponding TangConfig whach can be used for encryption
+// toConfig converts a given TangPin to the corresponding TangConfig which can be used for encryption
 func (p TangPin) toConfig() (TangConfig, error) {
 	c := TangConfig{
 		URL: p.URL,
@@ -163,17 +163,7 @@ func NewTangConfig(config string) (TangConfig, error) {
 	return c, nil
 }
 
-var (
-	thpAlgos = []crypto.Hash{
-		crypto.SHA256, /* S256 */
-		crypto.SHA1,   /* S1 */
-		crypto.SHA224, /* S224 */
-		crypto.SHA384, /* S384 */
-		crypto.SHA512, /* S512 */
-	}
-
-	defaultThpAlgo = crypto.SHA256
-)
+var defaultThpAlgo = crypto.SHA256
 
 // EncryptTang encrypts a bytestream according to the json-format tang config
 func EncryptTang(data []byte, config string) ([]byte, error) {
@@ -300,47 +290,6 @@ func (c TangConfig) encrypt(data []byte) ([]byte, error) {
 	return jwe.Encrypt(data, jwa.ECDH_ES, exchangeKey, jwa.A256GCM, jwa.NoCompress, jwe.WithProtectedHeaders(hdrs))
 }
 
-func findByThumbprint(keys []jwk.Key, thumbprint string) (jwk.Key, error) {
-	thpBytes, err := base64.RawURLEncoding.DecodeString(thumbprint)
-	if err != nil {
-		return nil, err
-	}
-
-	for _, k := range keys {
-		for _, a := range thpAlgos {
-			thp, err := k.Thumbprint(a)
-			if err != nil {
-				return nil, err
-			}
-			if bytes.Equal(thpBytes, thp) {
-				return k, nil
-			}
-		}
-	}
-
-	return nil, nil
-}
-
-func filterKeys(set jwk.Set, op jwk.KeyOperation) []jwk.Key {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	var keys []jwk.Key
-
-	for iter := set.Iterate(ctx); iter.Next(ctx); {
-		pair := iter.Pair()
-		key := pair.Value.(jwk.Key)
-
-		for _, o := range key.KeyOps() {
-			if o == op {
-				keys = append(keys, key)
-			}
-		}
-	}
-
-	return keys
-}
-
 func performEcmrExhange(url string, advertizedKeys jwk.Set, serverKeyID string, e jwk.Key) (*ecdsa.PublicKey, error) {
 	// JWX does not implement ECMR (used by clevis/jose tool).
 	// So we perform ECMR exchange ourselves, construct the EC public key as described here https://github.com/latchset/tang#recovery
@@ -350,7 +299,7 @@ func performEcmrExhange(url string, advertizedKeys jwk.Set, serverKeyID string, 
 	if err := e.Raw(&epk); err != nil {
 		return nil, err
 	}
-	webKey, err := lookupKey(advertizedKeys, serverKeyID)
+	webKey, err := findByThumbprintInSet(advertizedKeys, serverKeyID)
 	if err != nil {
 		return nil, err
 	}
@@ -426,34 +375,82 @@ func performTangServerRequest(url string, key *ecdsa.PublicKey) (*ecdsa.PublicKe
 	return &ret, nil
 }
 
-// go through keys and find one with thumbprint equal to 'kid'
-func lookupKey(keys jwk.Set, kid string) (jwk.Key, error) {
-	thumbprint, err := base64.RawURLEncoding.DecodeString(kid)
+var thpAlgos = map[crypto.Hash]int{
+	crypto.SHA256: 32, /* S256 */
+	crypto.SHA1:   20, /* S1 */
+	crypto.SHA224: 28, /* S224 */
+	crypto.SHA384: 48, /* S384 */
+	crypto.SHA512: 64, /* S512 */
+}
+
+func findByThumbprint(keys []jwk.Key, thumbprint string) (jwk.Key, error) {
+	thpBytes, err := base64.RawURLEncoding.DecodeString(thumbprint)
 	if err != nil {
 		return nil, err
 	}
-	var hash crypto.Hash
-	switch len(thumbprint) {
-	case crypto.SHA256.Size():
-		hash = crypto.SHA256
-	case crypto.SHA1.Size():
-		hash = crypto.SHA1
-	default:
-		return nil, fmt.Errorf("cannot detect hash algorithm for thumbprint with size %d", len(thumbprint))
-	}
 
-	for iter := keys.Iterate(context.TODO()); iter.Next(context.TODO()); {
-		pair := iter.Pair()
-		key := pair.Value.(jwk.Key)
-
-		thp, err := key.Thumbprint(hash)
-		if err != nil {
-			return nil, err
+	for h, l := range thpAlgos {
+		if l != len(thpBytes) {
+			continue
 		}
-		if bytes.Equal(thumbprint, thp) {
-			return key, nil
+		for _, k := range keys {
+			thp, err := k.Thumbprint(h)
+			if err != nil {
+				return nil, err
+			}
+			if bytes.Equal(thpBytes, thp) {
+				return k, nil
+			}
 		}
 	}
 
 	return nil, nil
+}
+
+// go through keys and find one with thumbprint equal to 'thumbprint'
+func findByThumbprintInSet(keys jwk.Set, thumbprint string) (jwk.Key, error) {
+	thpBytes, err := base64.RawURLEncoding.DecodeString(thumbprint)
+	if err != nil {
+		return nil, err
+	}
+
+	for h, l := range thpAlgos {
+		if l != len(thpBytes) {
+			continue
+		}
+		for iter := keys.Iterate(context.TODO()); iter.Next(context.TODO()); {
+			pair := iter.Pair()
+			key := pair.Value.(jwk.Key)
+
+			thp, err := key.Thumbprint(h)
+			if err != nil {
+				return nil, err
+			}
+			if bytes.Equal(thpBytes, thp) {
+				return key, nil
+			}
+		}
+	}
+
+	return nil, nil
+}
+
+func filterKeys(set jwk.Set, op jwk.KeyOperation) []jwk.Key {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var keys []jwk.Key
+
+	for iter := set.Iterate(ctx); iter.Next(ctx); {
+		pair := iter.Pair()
+		key := pair.Value.(jwk.Key)
+
+		for _, o := range key.KeyOps() {
+			if o == op {
+				keys = append(keys, key)
+			}
+		}
+	}
+
+	return keys
 }

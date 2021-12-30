@@ -52,7 +52,7 @@ type Config struct {
 	Yubikey *YubikeyConfig `json:"yubikey,omitempty"`
 }
 
-// ExtractConfig creates a Config struct that corresponds to an existing enceypted payload.  This can be used to encrypt something else in exactly the same way.
+// ExtractConfig creates a Config struct that corresponds to an existing encrypted payload. This can be used to encrypt something else in exactly the same way.
 func ExtractConfig(data []byte) (Config, error) {
 	_, pin, err := Parse(data)
 	if err != nil {
@@ -116,7 +116,6 @@ func recoverClevisKey(ctx jwe.DecryptCtx) error {
 	ctx.SetAlgorithm(jwa.DIRECT)
 	ctx.SetKey(key)
 	return nil
-
 }
 
 func (p Pin) recoverKey(msg *jwe.Message) ([]byte, error) {
