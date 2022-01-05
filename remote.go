@@ -20,21 +20,21 @@ import (
 	"github.com/lestrrat-go/jwx/jws"
 )
 
-const reverseTangDefaultPort = 8609
+const remoteDefaultPort = 8609
 
-// ReverseTangPin represents the data tang needs to perform decryption
-type ReverseTangPin struct {
+// RemotePin represents the data tang needs to perform decryption
+type RemotePin struct {
 	Advertisement json.RawMessage `json:"adv"`
 	Port          int             `json:"port"`
 }
 
-// toConfig converts a given ReverseTangPin to the corresponding ReverseTangConfig which can be used for encryption
-func (p ReverseTangPin) toConfig() (ReverseTangConfig, error) {
+// toConfig converts a given RemotePin to the corresponding RemoteConfig which can be used for encryption
+func (p RemotePin) toConfig() (RemoteConfig, error) {
 	port := p.Port
 	if port == 0 {
-		port = reverseTangDefaultPort
+		port = remoteDefaultPort
 	}
-	c := ReverseTangConfig{
+	c := RemoteConfig{
 		Port: port,
 	}
 
@@ -58,7 +58,7 @@ func (p ReverseTangPin) toConfig() (ReverseTangConfig, error) {
 	return c, nil
 }
 
-func (p ReverseTangPin) recoverKey(msg *jwe.Message) ([]byte, error) {
+func (p RemotePin) recoverKey(msg *jwe.Message) ([]byte, error) {
 	if p.Advertisement == nil {
 		return nil, fmt.Errorf("cannot parse provided token, node 'clevis.tang.adv'")
 	}
@@ -259,8 +259,8 @@ func handleRequest(conn net.Conn, advertizedKeys jwk.Set, serverKeyID string, re
 	return &ret, nil
 }
 
-// ReverseTangConfig represents the data needed to perform reverse tang-based encryption
-type ReverseTangConfig struct {
+// RemoteConfig represents the data needed to perform remote tang-based encryption
+type RemoteConfig struct {
 	// A trusted advertisement (raw JSON or a filename containing JSON)
 	Advertisement *json.RawMessage `json:"adv,omitempty"`
 
@@ -271,17 +271,17 @@ type ReverseTangConfig struct {
 	Thumbprint string `json:"thp,omitempty"`
 }
 
-// NewReverseTangConfig parses the given json-format reverse-tang config into a ReverseTangConfig
-func NewReverseTangConfig(config string) (ReverseTangConfig, error) {
-	var c ReverseTangConfig
+// NewRemoteConfig parses the given json-format tang-based remote config into a RemoteConfig
+func NewRemoteConfig(config string) (RemoteConfig, error) {
+	var c RemoteConfig
 	if err := json.Unmarshal([]byte(config), &c); err != nil {
 		return c, err
 	}
 	return c, nil
 }
 
-// encrypt a bytestream according to the ReverseTangConfig
-func (c ReverseTangConfig) encrypt(data []byte) ([]byte, error) {
+// encrypt a bytestream according to the RemoteConfig
+func (c RemoteConfig) encrypt(data []byte) ([]byte, error) {
 	var path string
 	var msgContent []byte
 
@@ -371,8 +371,8 @@ func (c ReverseTangConfig) encrypt(data []byte) ([]byte, error) {
 	}
 	advert := json.RawMessage(advertBytes)
 	header := Pin{
-		Pin: "reverse-tang",
-		ReverseTang: &ReverseTangPin{
+		Pin: "remote",
+		Remote: &RemotePin{
 			Port:          c.Port,
 			Advertisement: advert,
 		},

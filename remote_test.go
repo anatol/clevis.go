@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-func TestReverseTang(t *testing.T) {
+func TestRemotePin(t *testing.T) {
 	t.Parallel()
 
 	const inputText = "some plaintext foobar"
@@ -23,10 +23,10 @@ func TestReverseTang(t *testing.T) {
 	ks, err := tang.ReadKeys(keysDir)
 	require.NoError(t, err)
 
-	// encrypt a text using 'clevis-encrypt-reverse-tang' like this:
-	// clevis-encrypt-reverse-tang '{"adv":"..."}' <<< "hello"
+	// encrypt a text using 'clevis-encrypt-remote' like this:
+	// clevis-encrypt-remote '{"adv":"..."}' <<< "hello"
 	config := fmt.Sprintf(`{"adv": %s, "port": 16798}`, ks.DefaultAdvertisement)
-	encryptCmd := exec.Command("./clevis-encrypt-reverse-tang", config)
+	encryptCmd := exec.Command("./clevis-encrypt-remote", config)
 	encryptCmd.Stdin = strings.NewReader(inputText)
 	var encryptedData bytes.Buffer
 	encryptCmd.Stdout = &encryptedData

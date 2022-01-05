@@ -19,7 +19,7 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #
 
-SUMMARY="Encrypts using a Reverse Tang binding server policy"
+SUMMARY="Encrypts using a over-the-network Remote binding server policy"
 
 if [ "$1" == "--summary" ]; then
     echo "$SUMMARY"
@@ -29,7 +29,7 @@ fi
 if [ -t 0 ]; then
     exec >&2
     echo
-    echo "Usage: clevis encrypt reverse-tang CONFIG [-y] < PLAINTEXT > JWE"
+    echo "Usage: clevis encrypt remote CONFIG [-y] < PLAINTEXT > JWE"
     echo
     echo "$SUMMARY"
     echo
@@ -61,13 +61,13 @@ fi
 
 CLEVIS_DEFAULT_THP_ALG=S256       # SHA-256.
 CLEVIS_ALTERNATIVE_THP_ALGS=S1    # SHA-1.
-REVERSE_TANG_DEFAULT_PORT=8609
+REMOTE_DEFAULT_PORT=8609
 
 trust=
 [ -n "${2}" ] && [ "${2}" == "-y" ] && trust=yes
 
 if ! port="$(jose fmt -j- -Og port -Io- <<< "$cfg")"; then
-    port=$REVERSE_TANG_DEFAULT_PORT
+    port=$REMOTE_DEFAULT_PORT
 fi
 
 thp="$(jose fmt -j- -Og thp -Su- <<< "$cfg")" || true
@@ -145,8 +145,8 @@ fi
 jwk="$(jose fmt -j- -Od key_ops -o- <<< "$jwk")"
 jwk="$(jose fmt -j- -Od alg -o- <<< "$jwk")"
 kid="$(jose jwk thp -i- -a "${CLEVIS_DEFAULT_THP_ALG}"  <<< "$jwk")"
-jwe='{"protected":{"alg":"ECDH-ES","enc":"A256GCM","clevis":{"pin":"reverse-tang","reverse-tang":{}}}}'
+jwe='{"protected":{"alg":"ECDH-ES","enc":"A256GCM","clevis":{"pin":"remote","remote":{}}}}'
 jwe="$(jose fmt -j "$jwe" -g protected -q "$kid" -s kid -UUo-)"
-jwe="$(jose fmt -j "$jwe" -g protected -g clevis -g reverse-tang -j $port -Is port -UUUUo-)"
-jwe="$(jose fmt -j "$jwe" -g protected -g clevis -g reverse-tang -j- -s adv -UUUUo- <<< "$jwks")"
+jwe="$(jose fmt -j "$jwe" -g protected -g clevis -g remote -j $port -Is port -UUUUo-)"
+jwe="$(jose fmt -j "$jwe" -g protected -g clevis -g remote -j- -s adv -UUUUo- <<< "$jwks")"
 exec jose jwe enc -i- -k- -I- -c < <(echo -n "$jwe$jwk"; /bin/cat)

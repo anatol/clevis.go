@@ -9,12 +9,12 @@ import (
 
 // Pin represents the structured clevis data which can be used to decrypt the jwe message
 type Pin struct {
-	Pin         string          `json:"pin"`
-	Tang        *TangPin        `json:"tang,omitempty"`
-	ReverseTang *ReverseTangPin `json:"reverse-tang,omitempty"`
-	Tpm2        *Tpm2Pin        `json:"tpm2,omitempty"`
-	Sss         *SssPin         `json:"sss,omitempty"`
-	Yubikey     *YubikeyPin     `json:"yubikey,omitempty"`
+	Pin     string      `json:"pin"`
+	Tang    *TangPin    `json:"tang,omitempty"`
+	Remote  *RemotePin  `json:"remote,omitempty"`
+	Tpm2    *Tpm2Pin    `json:"tpm2,omitempty"`
+	Sss     *SssPin     `json:"sss,omitempty"`
+	Yubikey *YubikeyPin `json:"yubikey,omitempty"`
 }
 
 func init() {
@@ -46,12 +46,12 @@ func pinFromMsg(msg *jwe.Message) (*Pin, error) {
 
 // Config represents the structured clevis data which can be used to encrypt a []byte
 type Config struct {
-	Pin         string             `json:"pin"`
-	Tang        *TangConfig        `json:"tang,omitempty"`
-	ReverseTang *ReverseTangConfig `json:"reverse-tang,omitempty"`
-	Tpm2        *Tpm2Config        `json:"tpm2,omitempty"`
-	Sss         *SssConfig         `json:"sss,omitempty"`
-	Yubikey     *YubikeyConfig     `json:"yubikey,omitempty"`
+	Pin     string         `json:"pin"`
+	Tang    *TangConfig    `json:"tang,omitempty"`
+	Remote  *RemoteConfig  `json:"remote,omitempty"`
+	Tpm2    *Tpm2Config    `json:"tpm2,omitempty"`
+	Sss     *SssConfig     `json:"sss,omitempty"`
+	Yubikey *YubikeyConfig `json:"yubikey,omitempty"`
 }
 
 // ExtractConfig creates a Config struct that corresponds to an existing encrypted payload. This can be used to encrypt something else in exactly the same way.
@@ -75,12 +75,12 @@ func (p Pin) ToConfig() (Config, error) {
 			return c, err
 		}
 		c.Tang = &cfg
-	case "reverse-tang":
-		cfg, err := p.ReverseTang.toConfig()
+	case "remote":
+		cfg, err := p.Remote.toConfig()
 		if err != nil {
 			return c, err
 		}
-		c.ReverseTang = &cfg
+		c.Remote = &cfg
 	case "tpm2":
 		cfg, err := p.Tpm2.toConfig()
 		if err != nil {
@@ -130,8 +130,8 @@ func (p Pin) recoverKey(msg *jwe.Message) ([]byte, error) {
 	switch p.Pin {
 	case "tang":
 		return p.Tang.recoverKey(msg)
-	case "reverse-tang":
-		return p.ReverseTang.recoverKey(msg)
+	case "remote":
+		return p.Remote.recoverKey(msg)
 	case "sss":
 		return p.Sss.recoverKey()
 	case "tpm2":
@@ -155,12 +155,12 @@ func Encrypt(data []byte, pin string, config string) ([]byte, error) {
 			return nil, err
 		}
 		c.Tang = &cfg
-	case "reverse-tang":
-		cfg, err := NewReverseTangConfig(config)
+	case "remote":
+		cfg, err := NewRemoteConfig(config)
 		if err != nil {
 			return nil, err
 		}
-		c.ReverseTang = &cfg
+		c.Remote = &cfg
 	case "tpm2":
 		cfg, err := NewTpm2Config(config)
 		if err != nil {
@@ -188,8 +188,8 @@ func (c Config) Encrypt(data []byte) ([]byte, error) {
 	switch c.Pin {
 	case "tang":
 		return c.Tang.encrypt(data)
-	case "reverse-tang":
-		return c.ReverseTang.encrypt(data)
+	case "remote":
+		return c.Remote.encrypt(data)
 	case "sss":
 		return c.Sss.encrypt(data)
 	case "tpm2":
