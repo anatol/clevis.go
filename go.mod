@@ -3,14 +3,14 @@ module github.com/anatol/clevis.go
 go 1.17
 
 require (
-	github.com/anatol/tang.go v0.0.0-20211230003118-4e3b011304ee
-	github.com/goccy/go-json v0.8.1 // indirect
-	github.com/google/go-tpm v0.3.3-0.20210409082102-d3310770bfec
+	github.com/anatol/tang.go v0.0.0-20220228200145-7d0d81ac3cf3
+	github.com/goccy/go-json v0.9.4 // indirect
+	github.com/google/go-tpm v0.3.3
 	github.com/lestrrat-go/backoff/v2 v2.0.8 // indirect
-	github.com/lestrrat-go/jwx v1.2.14
+	github.com/lestrrat-go/jwx v1.2.19
 	github.com/stretchr/testify v1.7.0
-	golang.org/x/crypto v0.0.0-20211215153901-e495a2d5b3d3
-	golang.org/x/sys v0.0.0-20211216021012-1d35b9e2eb4e // indirect
+	golang.org/x/crypto v0.0.0-20220214200702-86341886e292
+	golang.org/x/sys v0.0.0-20220227234510-4e6760a101f9 // indirect
 	gopkg.in/yaml.v3 v3.0.0-20210107192922-496545a6307b // indirect
 )
 
