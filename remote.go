@@ -144,7 +144,9 @@ func performEcmrExhangeReverse(port int, advertizedKeys jwk.Set, serverKeyID str
 
 	x, y = ecCurve.ScalarMult(serverKey.X, serverKey.Y, tempKey.D.Bytes())
 	// resp - tmp
-	x, y = ecCurve.Add(respKey.X, respKey.Y, x, new(big.Int).Neg(y))
+	yy := new(big.Int).Neg(y)
+	yy.Mod(yy, ecCurve.Params().P)
+	x, y = ecCurve.Add(respKey.X, respKey.Y, x, yy)
 
 	return &ecdsa.PublicKey{Curve: ecCurve, X: x, Y: y}, nil
 }
