@@ -52,10 +52,9 @@ func (c tangEncrypter) encrypt(data []byte) ([]byte, error) {
 		return nil, fmt.Errorf("missing 'url' property")
 	}
 
-	thumbprint := c.Thumbprint
 	if c.Advertisement == nil {
 		// no advertisement provided, fetch one from the server
-		resp, err := http.Get(c.URL + "/adv/" + thumbprint)
+		resp, err := http.Get(c.URL + "/adv/" + c.Thumbprint)
 		if err != nil {
 			return nil, err
 		}
@@ -78,6 +77,20 @@ func (c tangEncrypter) encrypt(data []byte) ([]byte, error) {
 		return nil, err
 	}
 
+	clevis := map[string]interface{}{
+		"pin": "tang",
+		"tang": tangDecrypter{
+			URL:           c.URL,
+			Advertisement: msg.Payload(),
+		},
+	}
+
+	return encryptWithTangProtocol(data, msgContent, msg, c.Thumbprint, clevis)
+}
+
+// Both Tang and Remote (aka reverse-Tang) protocols share a lot of common functionality.
+// encryptWithTangProtocol is a common part of these protocols encryption
+func encryptWithTangProtocol(data []byte, msgContent []byte, msg *jws.Message, thumbprint string, clevis map[string]interface{}) ([]byte, error) {
 	keys, err := jwk.Parse(msg.Payload())
 	if err != nil {
 		return nil, err
@@ -141,13 +154,6 @@ func (c tangEncrypter) encrypt(data []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	clevis := map[string]interface{}{
-		"pin": "tang",
-		"tang": tangDecrypter{
-			URL:           c.URL,
-			Advertisement: msg.Payload(),
-		},
-	}
 	m, err := json.Marshal(clevis)
 	if err != nil {
 		return nil, err
@@ -177,22 +183,100 @@ func (p tangDecrypter) recoverKey(msg *jwe.Message) ([]byte, error) {
 	if p.Advertisement == nil {
 		return nil, fmt.Errorf("cannot parse provided token, node 'clevis.tang.adv'")
 	}
-
-	advertizedKeys, err := jwk.Parse(p.Advertisement)
-	if err != nil {
-		return nil, err
-	}
-
 	if p.URL == "" {
 		return nil, fmt.Errorf("cannot parse provided token, node 'clevis.tang.url'")
 	}
 
-	headers := msg.ProtectedHeaders()
+	exchangeWithTang := func(serverKeyID string, _ jwk.Set, reqData []byte) ([]byte, error) {
+		resp, err := http.Post(p.URL+"/rec/"+serverKeyID, "application/jwk+json", bytes.NewReader(reqData))
+		if err != nil {
+			return nil, err
+		}
+		defer resp.Body.Close()
 
-	receivedKey, err := performEcmrExhange(p.URL, advertizedKeys, headers.KeyID(), headers.EphemeralPublicKey())
+		return io.ReadAll(resp.Body)
+	}
+
+	return recoverKeyWithTangProtocol(msg, p.Advertisement, exchangeWithTang)
+}
+
+type tangExchangeFn func(serverKeyID string, advertizedKeys jwk.Set, reqData []byte) ([]byte, error)
+
+func recoverKeyWithTangProtocol(msg *jwe.Message, adv json.RawMessage, exchangeFn tangExchangeFn) ([]byte, error) {
+	advertizedKeys, err := jwk.Parse(adv)
 	if err != nil {
 		return nil, err
 	}
+
+	headers := msg.ProtectedHeaders()
+	e := headers.EphemeralPublicKey()
+	serverKeyID := headers.KeyID()
+
+	// JWX does not implement ECMR (used by clevis/jose tool).
+	// So we perform ECMR exchange ourselves, construct the EC public key as described here https://github.com/latchset/tang#recovery
+	// and then use it as a new ephemeral key in ECDS.
+	// Then we reconstruct EC key using concat kdf.
+	var epk ecdsa.PublicKey
+	if err := e.Raw(&epk); err != nil {
+		return nil, err
+	}
+	webKey, err := findByThumbprintInSet(advertizedKeys, serverKeyID)
+	if err != nil {
+		return nil, err
+	}
+	var serverKey ecdsa.PublicKey
+	if err := webKey.Raw(&serverKey); err != nil {
+		return nil, err
+	}
+
+	ecCurve := serverKey.Curve // curve used for the key exchange
+
+	if !ecCurve.IsOnCurve(epk.X, epk.Y) {
+		return nil, fmt.Errorf("server key is not on the curve %v", ecCurve)
+	}
+
+	tempKey, err := ecdsa.GenerateKey(ecCurve, rand.Reader)
+	if err != nil {
+		return nil, err
+	}
+
+	x, y := ecCurve.Add(tempKey.X, tempKey.Y, epk.X, epk.Y)
+	xfrKey := &ecdsa.PublicKey{Curve: ecCurve, X: x, Y: y}
+
+	reqKey, err := jwk.New(xfrKey)
+	if err != nil {
+		return nil, err
+	}
+	if err := reqKey.Set(jwk.AlgorithmKey, "ECMR"); err != nil {
+		return nil, err
+	}
+
+	reqData, err := json.Marshal(reqKey)
+	if err != nil {
+		return nil, err
+	}
+
+	respData, err := exchangeFn(serverKeyID, advertizedKeys, reqData)
+	if err != nil {
+		return nil, err
+	}
+
+	var respKey ecdsa.PublicKey
+	if err := jwk.ParseRawKey(respData, &respKey); err != nil {
+		return nil, err
+	}
+
+	if respKey.Curve != ecCurve {
+		return nil, fmt.Errorf("expect EC curve type %v, got %v", ecCurve, respKey.Curve)
+	}
+
+	x, y = ecCurve.ScalarMult(serverKey.X, serverKey.Y, tempKey.D.Bytes())
+	// resp - tmp
+	yy := new(big.Int).Neg(y)
+	yy.Mod(yy, ecCurve.Params().P)
+	x, y = ecCurve.Add(respKey.X, respKey.Y, x, yy)
+
+	receivedKey := &ecdsa.PublicKey{Curve: ecCurve, X: x, Y: y}
 
 	keysize, err := keySize(headers.ContentEncryption())
 	if err != nil {
@@ -211,8 +295,7 @@ func (p tangDecrypter) recoverKey(msg *jwe.Message) ([]byte, error) {
 	data = append(data, ndata(headers.AgreementPartyVInfo())...)
 	data = append(data, pubinfo...)
 
-	key := concatKDF(sha256.New(), zBytes, data, keysize)
-	return key, nil
+	return concatKDF(sha256.New(), zBytes, data, keysize), nil
 }
 
 // NIST SP 800-56 Concatenation Key Derivation Function (see section 5.8.1).
@@ -253,93 +336,6 @@ func ndata(src []byte) []byte {
 	buf := make([]byte, 4)
 	binary.BigEndian.PutUint32(buf, uint32(len(src)))
 	return append(buf, src...)
-}
-
-func performEcmrExhange(url string, advertizedKeys jwk.Set, serverKeyID string, e jwk.Key) (*ecdsa.PublicKey, error) {
-	// JWX does not implement ECMR (used by clevis/jose tool).
-	// So we perform ECMR exchange ourselves, construct the EC public key as described here https://github.com/latchset/tang#recovery
-	// and then use it as a new ephemeral key in ECDS.
-	// For private key used in msg.Decrypt(ECDH_ES) we provide (1,0) thus ECDS multiplication does not modify our new key.
-	var epk ecdsa.PublicKey
-	if err := e.Raw(&epk); err != nil {
-		return nil, err
-	}
-	webKey, err := findByThumbprintInSet(advertizedKeys, serverKeyID)
-	if err != nil {
-		return nil, err
-	}
-	var serverKey ecdsa.PublicKey
-	if err := webKey.Raw(&serverKey); err != nil {
-		return nil, err
-	}
-
-	ecCurve := serverKey.Curve // curve used for the key exchange
-
-	if !ecCurve.IsOnCurve(epk.X, epk.Y) {
-		return nil, fmt.Errorf("server key is not on the curve %v", ecCurve)
-	}
-
-	tempKey, err := ecdsa.GenerateKey(ecCurve, rand.Reader)
-	if err != nil {
-		return nil, err
-	}
-
-	x, y := ecCurve.Add(tempKey.X, tempKey.Y, epk.X, epk.Y)
-	xfrKey := &ecdsa.PublicKey{Curve: ecCurve, X: x, Y: y}
-
-	respKey, err := performTangServerRequest(url+"/rec/"+serverKeyID, xfrKey)
-	if err != nil {
-		return nil, err
-	}
-
-	if respKey.Curve != ecCurve {
-		return nil, fmt.Errorf("expect EC curve type %v, got %v", ecCurve, respKey.Curve)
-	}
-
-	x, y = ecCurve.ScalarMult(serverKey.X, serverKey.Y, tempKey.D.Bytes())
-	// resp - tmp
-	yy := new(big.Int).Neg(y)
-	yy.Mod(yy, ecCurve.Params().P)
-	x, y = ecCurve.Add(respKey.X, respKey.Y, x, yy)
-
-	return &ecdsa.PublicKey{Curve: ecCurve, X: x, Y: y}, nil
-}
-
-func performTangServerRequest(url string, key *ecdsa.PublicKey) (*ecdsa.PublicKey, error) {
-	reqKey, err := jwk.New(key)
-	if err != nil {
-		return nil, err
-	}
-	if err := reqKey.Set(jwk.AlgorithmKey, "ECMR"); err != nil {
-		return nil, err
-	}
-
-	reqData, err := json.Marshal(reqKey)
-	if err != nil {
-		return nil, err
-	}
-
-	resp, err := http.Post(url, "application/jwk+json", bytes.NewReader(reqData))
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	respData, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-
-	respKey, err := jwk.ParseKey(respData)
-	if err != nil {
-		return nil, err
-	}
-
-	var ret ecdsa.PublicKey
-	if err := respKey.Raw(&ret); err != nil {
-		return nil, err
-	}
-	return &ret, nil
 }
 
 var thpAlgos = map[crypto.Hash]int{
@@ -420,4 +416,16 @@ func filterKeys(set jwk.Set, op jwk.KeyOperation) []jwk.Key {
 	}
 
 	return keys
+}
+
+func keysIntersect(a, b []jwk.Key) bool {
+	for _, i := range a {
+		for _, j := range b {
+			if i.KeyID() == j.KeyID() { // TODO: is it proper way to compare keys?
+				return true
+			}
+		}
+	}
+
+	return false
 }
