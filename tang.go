@@ -13,7 +13,6 @@ import (
 	"fmt"
 	"hash"
 	"io"
-	"math/big"
 	"net/http"
 	"os"
 
@@ -272,9 +271,7 @@ func recoverKeyWithTangProtocol(msg *jwe.Message, adv json.RawMessage, exchangeF
 
 	x, y = ecCurve.ScalarMult(serverKey.X, serverKey.Y, tempKey.D.Bytes())
 	// resp - tmp
-	yy := new(big.Int).Neg(y)
-	yy.Mod(yy, ecCurve.Params().P)
-	x, y = ecCurve.Add(respKey.X, respKey.Y, x, yy)
+	x, y = ecSubtract(ecCurve, respKey.X, respKey.Y, x, y)
 
 	receivedKey := &ecdsa.PublicKey{Curve: ecCurve, X: x, Y: y}
 
