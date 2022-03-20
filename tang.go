@@ -23,128 +23,9 @@ import (
 	"github.com/lestrrat-go/jwx/jws"
 )
 
-// TangPin represents the data tang needs to perform decryption
-type TangPin struct {
-	Advertisement json.RawMessage `json:"adv"`
-	URL           string          `json:"url"`
-}
-
-// toConfig converts a given TangPin to the corresponding TangConfig which can be used for encryption
-func (p TangPin) toConfig() (TangConfig, error) {
-	c := TangConfig{
-		URL: p.URL,
-	}
-
-	if p.Advertisement != nil {
-		keys, err := jwk.Parse(p.Advertisement)
-		if err != nil {
-			return c, err
-		}
-		verifyKeys := filterKeys(keys, jwk.KeyOpVerify)
-		if verifyKeys == nil {
-			return c, fmt.Errorf("no verify key in the stored advertisement")
-		}
-		verifyKey := verifyKeys[0] // TODO: find out what verify key is used by default
-		thpBytes, err := verifyKey.Thumbprint(defaultThpAlgo)
-		if err != nil {
-			return c, err
-		}
-		c.Thumbprint = base64.RawURLEncoding.EncodeToString(thpBytes)
-	}
-
-	return c, nil
-}
-
-// NIST SP 800-56 Concatenation Key Derivation Function (see section 5.8.1).
-func concatKDF(hash hash.Hash, z, s1 []byte, kdLen int) []byte {
-	counterBytes := make([]byte, 4)
-	var k []byte
-	for counter := uint32(1); len(k) < kdLen; counter++ {
-		binary.BigEndian.PutUint32(counterBytes, counter)
-		hash.Reset()
-		hash.Write(counterBytes)
-		hash.Write(z)
-		hash.Write(s1)
-		k = hash.Sum(k)
-	}
-	return k[:kdLen]
-}
-
-func keySize(alg jwa.ContentEncryptionAlgorithm) (int, error) {
-	switch alg {
-	case jwa.A128GCM:
-		return 16, nil
-	case jwa.A192GCM:
-		return 24, nil
-	case jwa.A256GCM:
-		return 32, nil
-	case jwa.A128CBC_HS256:
-		return 16, nil
-	case jwa.A192CBC_HS384:
-		return 24, nil
-	case jwa.A256CBC_HS512:
-		return 32, nil
-	default:
-		return 0, fmt.Errorf("failed to determine key size for content cipher: invalid algorithm (%s)", alg)
-	}
-}
-
-func ndata(src []byte) []byte {
-	buf := make([]byte, 4)
-	binary.BigEndian.PutUint32(buf, uint32(len(src)))
-	return append(buf, src...)
-}
-
-func (p TangPin) recoverKey(msg *jwe.Message) ([]byte, error) {
-	if p.Advertisement == nil {
-		return nil, fmt.Errorf("cannot parse provided token, node 'clevis.tang.adv'")
-	}
-
-	advertizedKeys, err := jwk.Parse(p.Advertisement)
-	if err != nil {
-		return nil, err
-	}
-
-	if p.URL == "" {
-		return nil, fmt.Errorf("cannot parse provided token, node 'clevis.tang.url'")
-	}
-
-	headers := msg.ProtectedHeaders()
-
-	receivedKey, err := performEcmrExhange(p.URL, advertizedKeys, headers.KeyID(), headers.EphemeralPublicKey())
-	if err != nil {
-		return nil, err
-	}
-
-	keysize, err := keySize(headers.ContentEncryption())
-	if err != nil {
-		return nil, err
-	}
-
-	bytesSize := divRoundUp(receivedKey.Curve.Params().BitSize, 8)
-	zBytes := expandBuffer(receivedKey.X.Bytes(), bytesSize)
-
-	pubinfo := make([]byte, 4)
-	binary.BigEndian.PutUint32(pubinfo, uint32(keysize*8))
-
-	var data []byte
-	data = append(data, ndata([]byte(headers.ContentEncryption().String()))...)
-	data = append(data, ndata(headers.AgreementPartyUInfo())...)
-	data = append(data, ndata(headers.AgreementPartyVInfo())...)
-	data = append(data, pubinfo...)
-
-	key := concatKDF(sha256.New(), zBytes, data, keysize)
-
-	if err := msg.Recipients()[0].Headers().Set(jwe.AlgorithmKey, jwa.DIRECT); err != nil {
-		return nil, err
-	}
-
-	return key, nil
-}
-
-// TangConfig represents the data needed to perform tang-based encryption
-type TangConfig struct {
-	// A trusted advertisement (raw JSON or a filename containing JSON)
+// tangEncrypter represents the data needed to perform tang-based encryption
+type tangEncrypter struct {
+	// A trusted advertisement (config JSON or a filename containing JSON)
 	Advertisement *json.RawMessage `json:"adv,omitempty"`
 
 	// The base URL of the Tang server (REQUIRED)
@@ -154,28 +35,16 @@ type TangConfig struct {
 	Thumbprint string `json:"thp,omitempty"`
 }
 
-// NewTangConfig parses the given json-format tang config into a TangConfig
-func NewTangConfig(config string) (TangConfig, error) {
-	var c TangConfig
+func parseTangEncrypterConfig(config string) (encrypter, error) {
+	var c tangEncrypter
 	if err := json.Unmarshal([]byte(config), &c); err != nil {
-		return c, err
+		return nil, err
 	}
 	return c, nil
 }
 
-var defaultThpAlgo = crypto.SHA256
-
-// EncryptTang encrypts a bytestream according to the json-format tang config
-func EncryptTang(data []byte, config string) ([]byte, error) {
-	c, err := NewTangConfig(config)
-	if err != nil {
-		return nil, err
-	}
-	return c.encrypt(data)
-}
-
-// encrypt a bytestream according to the TangConfig
-func (c TangConfig) encrypt(data []byte) ([]byte, error) {
+// Encrypt a bytestream according to the tangEncrypter
+func (c tangEncrypter) encrypt(data []byte) ([]byte, error) {
 	var path string
 	var msgContent []byte
 
@@ -272,18 +141,118 @@ func (c TangConfig) encrypt(data []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	header := Pin{
-		Pin: "tang",
-		Tang: &TangPin{
+	clevis := map[string]interface{}{
+		"pin": "tang",
+		"tang": tangDecrypter{
 			URL:           c.URL,
 			Advertisement: msg.Payload(),
 		},
 	}
-	if err := hdrs.Set("clevis", header); err != nil {
+	m, err := json.Marshal(clevis)
+	if err != nil {
+		return nil, err
+	}
+	if err := hdrs.Set("clevis", json.RawMessage(m)); err != nil {
 		return nil, err
 	}
 
 	return jwe.Encrypt(data, jwa.ECDH_ES, exchangeKey, jwa.A256GCM, jwa.NoCompress, jwe.WithProtectedHeaders(hdrs))
+}
+
+// tangDecrypter represents the data tang needs to perform decryption
+type tangDecrypter struct {
+	Advertisement json.RawMessage `json:"adv"`
+	URL           string          `json:"url"`
+}
+
+func parseTangDecrypterConfig(config []byte) (decrypter, error) {
+	var d tangDecrypter
+	if err := json.Unmarshal(config, &d); err != nil {
+		return nil, err
+	}
+	return d, nil
+}
+
+func (p tangDecrypter) recoverKey(msg *jwe.Message) ([]byte, error) {
+	if p.Advertisement == nil {
+		return nil, fmt.Errorf("cannot parse provided token, node 'clevis.tang.adv'")
+	}
+
+	advertizedKeys, err := jwk.Parse(p.Advertisement)
+	if err != nil {
+		return nil, err
+	}
+
+	if p.URL == "" {
+		return nil, fmt.Errorf("cannot parse provided token, node 'clevis.tang.url'")
+	}
+
+	headers := msg.ProtectedHeaders()
+
+	receivedKey, err := performEcmrExhange(p.URL, advertizedKeys, headers.KeyID(), headers.EphemeralPublicKey())
+	if err != nil {
+		return nil, err
+	}
+
+	keysize, err := keySize(headers.ContentEncryption())
+	if err != nil {
+		return nil, err
+	}
+
+	bytesSize := divRoundUp(receivedKey.Curve.Params().BitSize, 8)
+	zBytes := expandBuffer(receivedKey.X.Bytes(), bytesSize)
+
+	pubinfo := make([]byte, 4)
+	binary.BigEndian.PutUint32(pubinfo, uint32(keysize*8))
+
+	var data []byte
+	data = append(data, ndata([]byte(headers.ContentEncryption().String()))...)
+	data = append(data, ndata(headers.AgreementPartyUInfo())...)
+	data = append(data, ndata(headers.AgreementPartyVInfo())...)
+	data = append(data, pubinfo...)
+
+	key := concatKDF(sha256.New(), zBytes, data, keysize)
+	return key, nil
+}
+
+// NIST SP 800-56 Concatenation Key Derivation Function (see section 5.8.1).
+func concatKDF(hash hash.Hash, z, s1 []byte, kdLen int) []byte {
+	counterBytes := make([]byte, 4)
+	var k []byte
+	for counter := uint32(1); len(k) < kdLen; counter++ {
+		binary.BigEndian.PutUint32(counterBytes, counter)
+		hash.Reset()
+		hash.Write(counterBytes)
+		hash.Write(z)
+		hash.Write(s1)
+		k = hash.Sum(k)
+	}
+	return k[:kdLen]
+}
+
+func keySize(alg jwa.ContentEncryptionAlgorithm) (int, error) {
+	switch alg {
+	case jwa.A128GCM:
+		return 16, nil
+	case jwa.A192GCM:
+		return 24, nil
+	case jwa.A256GCM:
+		return 32, nil
+	case jwa.A128CBC_HS256:
+		return 16, nil
+	case jwa.A192CBC_HS384:
+		return 24, nil
+	case jwa.A256CBC_HS512:
+		return 32, nil
+	default:
+		return 0, fmt.Errorf("failed to determine key size for content cipher: invalid algorithm (%s)", alg)
+	}
+}
+
+func ndata(src []byte) []byte {
+	buf := make([]byte, 4)
+	binary.BigEndian.PutUint32(buf, uint32(len(src)))
+	return append(buf, src...)
 }
 
 func performEcmrExhange(url string, advertizedKeys jwk.Set, serverKeyID string, e jwk.Key) (*ecdsa.PublicKey, error) {

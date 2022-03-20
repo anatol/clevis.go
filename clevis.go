@@ -1,211 +1,126 @@
 package clevis
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"github.com/lestrrat-go/jwx/jwa"
 	"github.com/lestrrat-go/jwx/jwe"
 )
 
-// Pin represents the structured clevis data which can be used to decrypt the jwe message
-type Pin struct {
-	Pin     string      `json:"pin"`
-	Tang    *TangPin    `json:"tang,omitempty"`
-	Remote  *RemotePin  `json:"remote,omitempty"`
-	Tpm2    *Tpm2Pin    `json:"tpm2,omitempty"`
-	Sss     *SssPin     `json:"sss,omitempty"`
-	Yubikey *YubikeyPin `json:"yubikey,omitempty"`
-}
-
 func init() {
-	jwe.RegisterCustomField("clevis", Pin{})
+	jwe.RegisterCustomField("clevis", json.RawMessage{})
 }
 
-// Parse the bytestream into a jwe.Message and clevis.Pin
-func Parse(data []byte) (*jwe.Message, *Pin, error) {
-	msg, err := jwe.Parse(data)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	pin, err := pinFromMsg(msg)
-	if err != nil {
-		return msg, nil, err
-	}
-	return msg, pin, err
+// encrypter is an interface to implement pins encrypt functionality
+type encrypter interface {
+	// Encrypt accepts a plaintext as input and provides encrypted output
+	encrypt(input []byte) ([]byte, error)
 }
 
-func pinFromMsg(msg *jwe.Message) (*Pin, error) {
+// decrypter is an interface to implement pins decrypt functionality
+type decrypter interface {
+	// RecoverKey reconstructs a key for the given pin decrypter
+	recoverKey(msg *jwe.Message) ([]byte, error)
+}
+
+func parseEncrypterConfig(pin, config string) (encrypter, error) {
+	// TODO: turn parseXXXEncrypterConfig into a type parametrized function once 1.18 becomes more widespread
+	switch pin {
+	case "tang":
+		return parseTangEncrypterConfig(config)
+	case "remote":
+		return parseRemoteEncrypterConfig(config)
+	case "tpm2":
+		return parseTpm2EncrypterConfig(config)
+	case "sss":
+		return parseSssEncrypterConfig(config)
+	case "yubikey":
+		return parseYubikeyEncrypterConfig(config)
+	default:
+		// TODO: add custom encrypters from options
+		return nil, fmt.Errorf("unknown pin %s", pin)
+	}
+}
+
+// Encrypt the given data according to the pin type and config config data given.
+func Encrypt(input []byte, pin, config string) ([]byte, error) {
+	c, err := parseEncrypterConfig(pin, config)
+	if err != nil {
+		return nil, err
+	}
+	return c.encrypt(input)
+}
+
+// Decrypt decrypts a clevis bound message. The message format can be either compact or JSON.
+func Decrypt(input []byte) ([]byte, error) {
+	msg, err := jwe.Parse(input)
+	if err != nil {
+		return nil, err
+	}
+
 	n, ok := msg.ProtectedHeaders().Get("clevis")
 	if !ok {
 		return nil, fmt.Errorf("provided message does not contain 'clevis' node")
 	}
-	pin := n.(Pin)
-	return &pin, nil
-}
 
-// Config represents the structured clevis data which can be used to encrypt a []byte
-type Config struct {
-	Pin     string         `json:"pin"`
-	Tang    *TangConfig    `json:"tang,omitempty"`
-	Remote  *RemoteConfig  `json:"remote,omitempty"`
-	Tpm2    *Tpm2Config    `json:"tpm2,omitempty"`
-	Sss     *SssConfig     `json:"sss,omitempty"`
-	Yubikey *YubikeyConfig `json:"yubikey,omitempty"`
-}
-
-// ExtractConfig creates a Config struct that corresponds to an existing encrypted payload. This can be used to encrypt something else in exactly the same way.
-func ExtractConfig(data []byte) (Config, error) {
-	_, pin, err := Parse(data)
-	if err != nil {
-		return Config{}, err
-	}
-	return pin.ToConfig()
-}
-
-// ToConfig converts a clevis.Pin to the matching clevis.Config that can be used to encrypt something else in exactly the same way.
-func (p Pin) ToConfig() (Config, error) {
-	c := Config{
-		Pin: p.Pin,
-	}
-	switch c.Pin {
-	case "tang":
-		cfg, err := p.Tang.toConfig()
-		if err != nil {
-			return c, err
-		}
-		c.Tang = &cfg
-	case "remote":
-		cfg, err := p.Remote.toConfig()
-		if err != nil {
-			return c, err
-		}
-		c.Remote = &cfg
-	case "tpm2":
-		cfg, err := p.Tpm2.toConfig()
-		if err != nil {
-			return c, err
-		}
-		c.Tpm2 = &cfg
-	case "sss":
-		cfg, err := p.Sss.toConfig()
-		if err != nil {
-			return c, err
-		}
-		c.Sss = &cfg
-	case "yubikey":
-		cfg, err := p.Yubikey.toConfig()
-		if err != nil {
-			return c, err
-		}
-		c.Yubikey = &cfg
-	default:
-		return c, fmt.Errorf("unknown pin '%v'", p.Pin)
-	}
-	return c, nil
-}
-
-// Decrypt decrypts a clevis bound message. The message format can be either compact or JSON.
-func Decrypt(data []byte) ([]byte, error) {
-	return jwe.Decrypt(data, "", nil, jwe.WithPostParser(jwe.PostParseFunc(recoverClevisKey)))
-}
-
-func recoverClevisKey(ctx jwe.DecryptCtx) error {
-	msg := ctx.Message()
-	p, err := pinFromMsg(msg)
-	if err != nil {
-		return err
-	}
-	key, err := p.recoverKey(msg)
-	if err != nil {
-		return err
+	var node struct {
+		Pin string `json:"pin"`
 	}
 
-	ctx.SetAlgorithm(jwa.DIRECT)
-	ctx.SetKey(key)
-	return nil
-}
-
-func (p Pin) recoverKey(msg *jwe.Message) ([]byte, error) {
-	switch p.Pin {
-	case "tang":
-		return p.Tang.recoverKey(msg)
-	case "remote":
-		return p.Remote.recoverKey(msg)
-	case "sss":
-		return p.Sss.recoverKey()
-	case "tpm2":
-		return p.Tpm2.recoverKey()
-	case "yubikey":
-		return p.Yubikey.recoverKey()
-	default:
-		return nil, fmt.Errorf("unknown pin '%v'", p.Pin)
+	if err := json.Unmarshal(n.(json.RawMessage), &node); err != nil {
+		return nil, err
 	}
-}
-
-// Encrypt the given data according to the pin type and raw config data given.
-func Encrypt(data []byte, pin string, config string) ([]byte, error) {
-	c := Config{
-		Pin: pin,
+	pin := node.Pin
+	if pin == "" {
+		return nil, fmt.Errorf("clevis node does not contain 'pin' property")
 	}
-	switch pin {
-	case "tang":
-		cfg, err := NewTangConfig(config)
-		if err != nil {
-			return nil, err
-		}
-		c.Tang = &cfg
-	case "remote":
-		cfg, err := NewRemoteConfig(config)
-		if err != nil {
-			return nil, err
-		}
-		c.Remote = &cfg
-	case "tpm2":
-		cfg, err := NewTpm2Config(config)
-		if err != nil {
-			return nil, err
-		}
-		c.Tpm2 = &cfg
-	case "sss":
-		cfg, err := NewSssConfig(config)
-		if err != nil {
-			return nil, err
-		}
-		c.Sss = &cfg
-	case "yubikey":
-		cfg, err := NewYubikeyConfig(config)
-		if err != nil {
-			return nil, err
-		}
-		c.Yubikey = &cfg
+	var pins map[string]json.RawMessage
+	if err := json.Unmarshal(n.(json.RawMessage), &pins); err != nil {
+		return nil, err
 	}
-	return c.Encrypt(data)
-}
 
-// Encrypt the given data according to the clevis.Config
-func (c Config) Encrypt(data []byte) ([]byte, error) {
-	switch c.Pin {
-	case "tang":
-		return c.Tang.encrypt(data)
-	case "remote":
-		return c.Remote.encrypt(data)
-	case "sss":
-		return c.Sss.encrypt(data)
-	case "tpm2":
-		return c.Tpm2.encrypt(data)
-	case "yubikey":
-		return c.Yubikey.encrypt(data)
-	default:
-		return nil, fmt.Errorf("unknown pin '%v'", c.Pin)
+	config, ok := pins[pin]
+	if pin == "" {
+		return nil, fmt.Errorf("clevis node does not contain property %s", pin)
 	}
-}
 
-// Encrypt the given data according to the given clevis.Pin
-func (p Pin) Encrypt(data []byte) ([]byte, error) {
-	c, err := p.ToConfig()
+	d, err := parseDecrypterConfig(pin, config)
 	if err != nil {
 		return nil, err
 	}
-	return c.Encrypt(data)
+
+	key, err := d.recoverKey(msg)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := msg.Recipients()[0].Headers().Set(jwe.AlgorithmKey, jwa.DIRECT); err != nil {
+		return nil, err
+	}
+	// msg.Decrypt() is deprecated by jwx library. Once it is fully removed - replace it with
+	// jwe.Decrypt(input, jwa.DIRECT, key, jwe.WithPostParser(jwe.PostParseFunc(recoverClevisKey)))
+	// func recoverClevisKey(ctx jwe.DecryptCtx) error {
+	//	return ctx.Message().Recipients()[0].Headers().Set(jwe.AlgorithmKey, jwa.DIRECT)
+	//}
+	return msg.Decrypt(jwa.DIRECT, key)
+}
+
+func parseDecrypterConfig(pin string, config []byte) (decrypter, error) {
+	// TODO: turn parseXXXEncrypterConfig into a type parametrized function once 1.18 becomes more widespread
+	switch pin {
+	case "tang":
+		return parseTangDecrypterConfig(config)
+	case "remote":
+		return parseRemoteDecrypterConfig(config)
+	case "tpm2":
+		return parseTpm2DecrypterConfig(config)
+	case "sss":
+		return parseSssDecrypterConfig(config)
+	case "yubikey":
+		return parseYubikeyDecrypterConfig(config)
+	default:
+		// TODO: add custom encrypters from options
+		return nil, fmt.Errorf("unknown pin %s", pin)
+	}
 }

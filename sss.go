@@ -11,126 +11,25 @@ import (
 	"github.com/lestrrat-go/jwx/jwe"
 )
 
-// SssPin represents the data samir secret sharing needs to perform decryption
-type SssPin struct {
-	Prime     string   `json:"p"`
-	Threshold int      `json:"t"`
-	Jwe       []string `json:"jwe"`
-}
-
-// toConfig converts a given SssPin into the corresponding SssConfig which can be used for encryption
-func (p SssPin) toConfig() (SssConfig, error) {
-	c := SssConfig{
-		Threshold: p.Threshold,
-		Pins:      make(map[string][]json.RawMessage),
-	}
-	for _, jwePin := range p.Jwe {
-		_, pin, err := Parse([]byte(jwePin))
-		if err != nil {
-			return c, err
-		}
-		var cfg interface{}
-		switch pin.Pin {
-		case "tang":
-			cfg, err = pin.Tang.toConfig()
-		case "tpm2":
-			cfg, err = pin.Tpm2.toConfig()
-		case "sss":
-			cfg, err = pin.Sss.toConfig()
-		case "yubikey":
-			cfg, err = pin.Yubikey.toConfig()
-		default:
-			return c, fmt.Errorf("unknown pin '%v'", pin.Pin)
-		}
-		if err != nil {
-			return c, err
-		}
-		cfgBytes, err := json.Marshal(cfg)
-		if err != nil {
-			return c, err
-		}
-		c.Pins[pin.Pin] = append(c.Pins[pin.Pin], cfgBytes)
-	}
-	return c, nil
-}
-
-func (p SssPin) recoverKey() ([]byte, error) {
-	var prime big.Int
-	primeBytes, err := base64.RawURLEncoding.DecodeString(p.Prime)
-	if err != nil {
-		return nil, err
-	}
-	prime.SetBytes(primeBytes)
-	pointLength := len(primeBytes) // this is a length of numbers we use (p, x, y, resulting secret)
-
-	if !prime.ProbablyPrime(64) {
-		return nil, fmt.Errorf("parameter 'p' expected to be a prime number")
-	}
-
-	if len(p.Jwe) < p.Threshold {
-		return nil, fmt.Errorf("number of points %v is smaller than threshold %v", len(p.Jwe), p.Threshold)
-	}
-
-	points := make([]point, 0, p.Threshold)
-	for i, j := range p.Jwe {
-		pointData, err := Decrypt([]byte(j))
-		if err != nil {
-			fmt.Println(err)
-			continue
-		}
-		if len(pointData) != 2*pointLength {
-			return nil, fmt.Errorf("decoded message #%v should have size of two points (x and y). Expected size 2*%v, got %v", i, pointLength, len(pointData))
-		}
-
-		x := new(big.Int).SetBytes(pointData[:pointLength])
-		y := new(big.Int).SetBytes(pointData[pointLength:])
-
-		points = append(points, point{x, y})
-
-		if len(points) == p.Threshold {
-			// alright, there is enough points to interpolate the polynomial
-			break
-		}
-	}
-
-	cek := lagrangeInterpolation(&prime, points).Bytes()
-	if len(cek) > pointLength {
-		return nil, fmt.Errorf("expected interpolated data length is %v, got %v", pointLength, len(cek))
-	}
-	cek = expandBuffer(cek, pointLength)
-
-	return cek, nil
-}
-
-// SssConfig represents the data samir secret sharing needs to perform encryption
-type SssConfig struct {
+// sssEncrypter represents the data samir secret sharing needs to perform encryption
+type sssEncrypter struct {
 	// Threshold is the number of pins required for decryption
 	Threshold int `json:"t"`
 
-	// Pins used to encrypt the key fragments (must be >= Threshold pins provided)
+	// Pins used to encrypt the key fragments (size must be >= Threshold pins provided)
 	Pins map[string][]json.RawMessage `json:"pins"`
 }
 
-// NewSssConfig parses the given json-format sss config into a SssConfig
-func NewSssConfig(config string) (SssConfig, error) {
-	var c SssConfig
+func parseSssEncrypterConfig(config string) (encrypter, error) {
+	var c sssEncrypter
 	if err := json.Unmarshal([]byte(config), &c); err != nil {
-		return c, err
+		return nil, err
 	}
 	return c, nil
 }
 
-// EncryptSss encrypts a bytestream according to the json-format sss config
-func EncryptSss(data []byte, config string) ([]byte, error) {
-	c, err := NewSssConfig(config)
-	if err != nil {
-		return nil, err
-	}
-	return c.encrypt(data)
-}
-
-// encrypt a bytestream according to the SssConfig
-func (c SssConfig) encrypt(data []byte) ([]byte, error) {
+// Encrypt a bytestream according to the sssEncrypter
+func (c sssEncrypter) encrypt(data []byte) ([]byte, error) {
 	if c.Threshold < 1 {
 		return nil, fmt.Errorf("invalid threshold value")
 	}
@@ -192,21 +91,89 @@ func (c SssConfig) encrypt(data []byte) ([]byte, error) {
 
 	primeEncoded := base64.RawURLEncoding.EncodeToString(p.Bytes())
 
-	hdrs := jwe.NewHeaders()
-	clevis := Pin{
-		Pin: "sss",
-		Sss: &SssPin{
+	clevis := map[string]interface{}{
+		"pin": "sss",
+		"sss": sssDecrypter{
 			Threshold: c.Threshold,
 			Prime:     primeEncoded,
 			Jwe:       pinSecrets,
 		},
 	}
-	if err := hdrs.Set("clevis", clevis); err != nil {
+	m, err := json.Marshal(clevis)
+	if err != nil {
+		return nil, err
+	}
+
+	hdrs := jwe.NewHeaders()
+	if err := hdrs.Set("clevis", json.RawMessage(m)); err != nil {
 		return nil, err
 	}
 
 	encKey := extendBytes(coeff[0].Bytes(), primeLength) // we use 0-th coefficient as the encryption key
 	return jwe.Encrypt(data, jwa.DIRECT, encKey, jwa.A256GCM, jwa.NoCompress, jwe.WithProtectedHeaders(hdrs))
+}
+
+// sssDecrypter represents the data samir secret sharing needs to perform decryption
+type sssDecrypter struct {
+	Prime     string   `json:"p"`
+	Threshold int      `json:"t"`
+	Jwe       []string `json:"jwe"`
+}
+
+func parseSssDecrypterConfig(config []byte) (decrypter, error) {
+	var d sssDecrypter
+	if err := json.Unmarshal(config, &d); err != nil {
+		return nil, err
+	}
+	return d, nil
+}
+
+func (p sssDecrypter) recoverKey(_ *jwe.Message) ([]byte, error) {
+	var prime big.Int
+	primeBytes, err := base64.RawURLEncoding.DecodeString(p.Prime)
+	if err != nil {
+		return nil, err
+	}
+	prime.SetBytes(primeBytes)
+	pointLength := len(primeBytes) // this is a length of numbers we use (p, x, y, resulting secret)
+
+	if !prime.ProbablyPrime(64) {
+		return nil, fmt.Errorf("parameter 'p' expected to be a prime number")
+	}
+
+	if len(p.Jwe) < p.Threshold {
+		return nil, fmt.Errorf("number of points %v is smaller than threshold %v", len(p.Jwe), p.Threshold)
+	}
+
+	points := make([]point, 0, p.Threshold)
+	for i, j := range p.Jwe {
+		pointData, err := Decrypt([]byte(j))
+		if err != nil {
+			fmt.Println(err)
+			continue
+		}
+		if len(pointData) != 2*pointLength {
+			return nil, fmt.Errorf("decoded message #%v should have size of two points (x and y). Expected size 2*%v, got %v", i, pointLength, len(pointData))
+		}
+
+		x := new(big.Int).SetBytes(pointData[:pointLength])
+		y := new(big.Int).SetBytes(pointData[pointLength:])
+
+		points = append(points, point{x, y})
+
+		if len(points) == p.Threshold {
+			// alright, there is enough points to interpolate the polynomial
+			break
+		}
+	}
+
+	cek := lagrangeInterpolation(&prime, points).Bytes()
+	if len(cek) > pointLength {
+		return nil, fmt.Errorf("expected interpolated data length is %v, got %v", pointLength, len(cek))
+	}
+	cek = expandBuffer(cek, pointLength)
+
+	return cek, nil
 }
 
 func extendBytes(bytes []byte, length int) []byte {

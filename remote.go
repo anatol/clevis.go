@@ -2,6 +2,7 @@ package clevis
 
 import (
 	"bufio"
+	"crypto"
 	"crypto/ecdsa"
 	"crypto/rand"
 	"crypto/sha256"
@@ -21,44 +22,150 @@ import (
 )
 
 const remoteDefaultPort = 8609
+const defaultThpAlgo = crypto.SHA256
 
-// RemotePin represents the data tang needs to perform decryption
-type RemotePin struct {
+// remoteEncrypter represents the data needed to perform remote tang-based encryption
+type remoteEncrypter struct {
+	// A trusted advertisement (config JSON or a filename containing JSON)
+	Advertisement *json.RawMessage `json:"adv,omitempty"`
+
+	// Port to listen for incoming requests, if not set then 8609 used
+	Port int `json:"port"`
+
+	// The thumbprint of a trusted signing key
+	Thumbprint string `json:"thp,omitempty"`
+}
+
+func parseRemoteEncrypterConfig(config string) (encrypter, error) {
+	var c remoteEncrypter
+	if err := json.Unmarshal([]byte(config), &c); err != nil {
+		return nil, err
+	}
+	if c.Port == 0 {
+		c.Port = remoteDefaultPort
+	}
+	return c, nil
+}
+
+// Encrypt encrypts a bytestream for "remote" pin
+func (c remoteEncrypter) encrypt(data []byte) ([]byte, error) {
+	var path string
+	var msgContent []byte
+
+	thumbprint := c.Thumbprint
+	if c.Advertisement == nil {
+		return nil, fmt.Errorf("no advertisement specified")
+	} else if err := json.Unmarshal(*c.Advertisement, &path); err == nil {
+		// advertisement is a file
+		msgContent, err = os.ReadFile(path)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		msgContent = *c.Advertisement
+	}
+
+	msg, err := jws.Parse(msgContent)
+	if err != nil {
+		return nil, err
+	}
+
+	keys, err := jwk.Parse(msg.Payload())
+	if err != nil {
+		return nil, err
+	}
+
+	verifyKeys := filterKeys(keys, jwk.KeyOpVerify)
+	if verifyKeys == nil {
+		return nil, fmt.Errorf("advertisement is missing signatures")
+	}
+
+	for _, key := range verifyKeys {
+		if _, err = jws.Verify(msgContent, jwa.SignatureAlgorithm(key.Algorithm()), key); err != nil {
+			return nil, err
+		}
+	}
+
+	if thumbprint != "" {
+		k, err := findByThumbprint(verifyKeys, thumbprint)
+		if err != nil {
+			return nil, err
+		}
+		if k == nil {
+			return nil, fmt.Errorf("trusted JWK '%s' did not sign the advertisement", thumbprint)
+		}
+	}
+
+	exchangeKeys := filterKeys(keys, jwk.KeyOpDeriveKey)
+	if exchangeKeys == nil {
+		return nil, fmt.Errorf("no exchange keys found")
+	}
+
+	exchangeKey := exchangeKeys[0] // TODO: clarify what derive key is used by clevis
+
+	// we are going to modify the key but 'adv' node should have original keys
+	exchangeKey, err = exchangeKey.Clone()
+	if err != nil {
+		return nil, err
+	}
+
+	if err := exchangeKey.Set(jwk.KeyOpsKey, jwk.KeyOperationList{}); err != nil {
+		return nil, err
+	}
+	if err := exchangeKey.Set(jwk.AlgorithmKey, ""); err != nil {
+		return nil, err
+	}
+
+	thp, err := exchangeKey.Thumbprint(defaultThpAlgo)
+	if err != nil {
+		return nil, err
+	}
+	kid := base64.RawURLEncoding.EncodeToString(thp)
+
+	hdrs := jwe.NewHeaders()
+	if err := hdrs.Set(jwe.AlgorithmKey, jwa.ECDH_ES); err != nil {
+		return nil, err
+	}
+	if err := hdrs.Set(jwe.ContentEncryptionKey, jwa.A256GCM); err != nil {
+		return nil, err
+	}
+	if err := hdrs.Set(jwe.KeyIDKey, kid); err != nil {
+		return nil, err
+	}
+
+	clevis := map[string]interface{}{
+		"pin": "remote",
+		"remote": remoteDecrypter{
+			Port:          c.Port,
+			Advertisement: msg.Payload(),
+		},
+	}
+	m, err := json.Marshal(clevis)
+	if err != nil {
+		return nil, err
+	}
+	if err := hdrs.Set("clevis", json.RawMessage(m)); err != nil {
+		return nil, err
+	}
+
+	return jwe.Encrypt(data, jwa.ECDH_ES, exchangeKey, jwa.A256GCM, jwa.NoCompress, jwe.WithProtectedHeaders(hdrs))
+}
+
+// remoteDecrypter represents the data tang needs to perform decryption
+type remoteDecrypter struct {
 	Advertisement json.RawMessage `json:"adv"`
 	Port          int             `json:"port"`
 }
 
-// toConfig converts a given RemotePin to the corresponding RemoteConfig which can be used for encryption
-func (p RemotePin) toConfig() (RemoteConfig, error) {
-	port := p.Port
-	if port == 0 {
-		port = remoteDefaultPort
+func parseRemoteDecrypterConfig(config []byte) (decrypter, error) {
+	var d remoteDecrypter
+	if err := json.Unmarshal(config, &d); err != nil {
+		return nil, err
 	}
-	c := RemoteConfig{
-		Port: port,
-	}
-
-	if p.Advertisement != nil {
-		keys, err := jwk.Parse(p.Advertisement)
-		if err != nil {
-			return c, err
-		}
-		verifyKeys := filterKeys(keys, jwk.KeyOpVerify)
-		if verifyKeys == nil {
-			return c, fmt.Errorf("no verify key in the stored advertisement")
-		}
-		verifyKey := verifyKeys[0] // TODO: find out what verify key is used by default
-		thpBytes, err := verifyKey.Thumbprint(defaultThpAlgo)
-		if err != nil {
-			return c, err
-		}
-		c.Thumbprint = base64.RawURLEncoding.EncodeToString(thpBytes)
-	}
-
-	return c, nil
+	return d, nil
 }
 
-func (p RemotePin) recoverKey(msg *jwe.Message) ([]byte, error) {
+func (p remoteDecrypter) recoverKey(msg *jwe.Message) ([]byte, error) {
 	if p.Advertisement == nil {
 		return nil, fmt.Errorf("cannot parse provided token, node 'clevis.tang.adv'")
 	}
@@ -93,11 +200,6 @@ func (p RemotePin) recoverKey(msg *jwe.Message) ([]byte, error) {
 	data = append(data, pubinfo...)
 
 	key := concatKDF(sha256.New(), zBytes, data, keysize)
-
-	if err := msg.Recipients()[0].Headers().Set(jwe.AlgorithmKey, jwa.DIRECT); err != nil {
-		return nil, err
-	}
-
 	return key, nil
 }
 
@@ -259,125 +361,4 @@ func handleRequest(conn net.Conn, advertizedKeys jwk.Set, serverKeyID string, re
 		return nil, err
 	}
 	return &ret, nil
-}
-
-// RemoteConfig represents the data needed to perform remote tang-based encryption
-type RemoteConfig struct {
-	// A trusted advertisement (raw JSON or a filename containing JSON)
-	Advertisement *json.RawMessage `json:"adv,omitempty"`
-
-	// Port to listen for incoming requests, if not set then 8609 used
-	Port int `json:"port"`
-
-	// The thumbprint of a trusted signing key
-	Thumbprint string `json:"thp,omitempty"`
-}
-
-// NewRemoteConfig parses the given json-format tang-based remote config into a RemoteConfig
-func NewRemoteConfig(config string) (RemoteConfig, error) {
-	var c RemoteConfig
-	if err := json.Unmarshal([]byte(config), &c); err != nil {
-		return c, err
-	}
-	return c, nil
-}
-
-// encrypt a bytestream according to the RemoteConfig
-func (c RemoteConfig) encrypt(data []byte) ([]byte, error) {
-	var path string
-	var msgContent []byte
-
-	thumbprint := c.Thumbprint
-	if c.Advertisement == nil {
-		return nil, fmt.Errorf("no advertisement specified")
-	} else if err := json.Unmarshal(*c.Advertisement, &path); err == nil {
-		// advertisement is a file
-		msgContent, err = os.ReadFile(path)
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		msgContent = *c.Advertisement
-	}
-
-	msg, err := jws.Parse(msgContent)
-	if err != nil {
-		return nil, err
-	}
-
-	keys, err := jwk.Parse(msg.Payload())
-	if err != nil {
-		return nil, err
-	}
-
-	verifyKeys := filterKeys(keys, jwk.KeyOpVerify)
-	if verifyKeys == nil {
-		return nil, fmt.Errorf("advertisement is missing signatures")
-	}
-
-	for _, key := range verifyKeys {
-		if _, err = jws.Verify(msgContent, jwa.SignatureAlgorithm(key.Algorithm()), key); err != nil {
-			return nil, err
-		}
-	}
-
-	if thumbprint != "" {
-		k, err := findByThumbprint(verifyKeys, thumbprint)
-		if err != nil {
-			return nil, err
-		}
-		if k == nil {
-			return nil, fmt.Errorf("trusted JWK '%s' did not sign the advertisement", thumbprint)
-		}
-	}
-
-	exchangeKeys := filterKeys(keys, jwk.KeyOpDeriveKey)
-	if exchangeKeys == nil {
-		return nil, fmt.Errorf("no exchange keys found")
-	}
-
-	exchangeKey := exchangeKeys[0] // TODO: clarify what derive key is used by clevis
-
-	// we are going to modify the key but 'adv' node should have original keys
-	exchangeKey, err = exchangeKey.Clone()
-	if err != nil {
-		return nil, err
-	}
-
-	if err := exchangeKey.Set(jwk.KeyOpsKey, jwk.KeyOperationList{}); err != nil {
-		return nil, err
-	}
-	if err := exchangeKey.Set(jwk.AlgorithmKey, ""); err != nil {
-		return nil, err
-	}
-
-	thp, err := exchangeKey.Thumbprint(defaultThpAlgo)
-	if err != nil {
-		return nil, err
-	}
-	kid := base64.RawURLEncoding.EncodeToString(thp)
-
-	hdrs := jwe.NewHeaders()
-	if err := hdrs.Set(jwe.AlgorithmKey, jwa.ECDH_ES); err != nil {
-		return nil, err
-	}
-	if err := hdrs.Set(jwe.ContentEncryptionKey, jwa.A256GCM); err != nil {
-		return nil, err
-	}
-	if err := hdrs.Set(jwe.KeyIDKey, kid); err != nil {
-		return nil, err
-	}
-
-	header := Pin{
-		Pin: "remote",
-		Remote: &RemotePin{
-			Port:          c.Port,
-			Advertisement: msg.Payload(),
-		},
-	}
-	if err := hdrs.Set("clevis", header); err != nil {
-		return nil, err
-	}
-
-	return jwe.Encrypt(data, jwa.ECDH_ES, exchangeKey, jwa.A256GCM, jwa.NoCompress, jwe.WithProtectedHeaders(hdrs))
 }

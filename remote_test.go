@@ -3,14 +3,15 @@ package clevis
 import (
 	"bytes"
 	"fmt"
-	"github.com/anatol/tang.go"
-	"github.com/stretchr/testify/require"
 	"os"
 	"os/exec"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/anatol/tang.go"
+	"github.com/stretchr/testify/require"
 )
 
 func TestRemotePin(t *testing.T) {

@@ -19,23 +19,6 @@ import (
 	"github.com/lestrrat-go/jwx/jwk"
 )
 
-var useSWEmulatorPort = -1
-
-func openTPM() (io.ReadWriteCloser, error) {
-	if useSWEmulatorPort != -1 {
-		dev, err := net.Dial("tcp", fmt.Sprintf(":%d", useSWEmulatorPort))
-		if err != nil {
-			return nil, err
-		}
-
-		if _, err := tpm2.GetManufacturer(dev); err != nil {
-			return nil, fmt.Errorf("open tcp port %d: device is not a TPM 2.0", useSWEmulatorPort)
-		}
-		return dev, nil
-	}
-	return tpm2.OpenTPM("/dev/tpmrm0")
-}
-
 var defaultSymScheme = &tpm2.SymScheme{
 	Alg:     tpm2.AlgAES,
 	KeyBits: 128,
@@ -52,129 +35,8 @@ var defaultECCParams = &tpm2.ECCParams{
 	CurveID:   tpm2.CurveNISTP256,
 }
 
-// Tpm2Pin represents the data tpm2 needs to perform decryption
-type Tpm2Pin struct {
-	Hash    string      `json:"hash,omitempty"`
-	Key     string      `json:"key,omitempty"`
-	JwkPub  string      `json:"jwk_pub,omitempty"`
-	JwkPriv string      `json:"jwk_priv,omitempty"`
-	PcrBank string      `json:"pcr_bank,omitempty"`
-	PcrIds  interface{} `json:"pcr_ids,omitempty"`
-}
-
-// ToConfig converts a given Tpm2Pin into the corresponding Tpm2Config which can be used for encryption
-func (p Tpm2Pin) toConfig() (Tpm2Config, error) {
-	c := Tpm2Config{
-		Key:     p.Key,
-		Hash:    p.Hash,
-		PcrBank: p.PcrBank,
-		PcrIds:  p.PcrIds,
-	}
-	return c, nil
-}
-
-func (p Tpm2Pin) recoverKey() ([]byte, error) {
-	dev, err := openTPM()
-	if err != nil {
-		return nil, err
-	}
-	defer dev.Close()
-
-	_, err = tpm2.GetManufacturer(dev)
-	if err != nil {
-		return nil, fmt.Errorf("open %s: device is not a TPM 2.0", dev)
-	}
-
-	// tpm2_createprimary -Q -C "$auth" -g "$hash" -G "$key" -c "$TMP"/primary.context
-	hashAlgo := getAlgorithm(p.Hash)
-	if hashAlgo.IsNull() {
-		return nil, fmt.Errorf("unknown hash algo %v", p.Hash)
-	}
-
-	keyAlgo := getAlgorithm(p.Key)
-	if keyAlgo.IsNull() {
-		return nil, fmt.Errorf("unknown key algo %v", p.Key)
-	}
-
-	srkTemplate := tpm2.Public{
-		Type:          keyAlgo,
-		NameAlg:       hashAlgo,
-		Attributes:    tpm2.FlagStorageDefault,
-		AuthPolicy:    nil,
-		ECCParameters: defaultECCParams,
-		RSAParameters: defaultRSAParams,
-	}
-
-	srkHandle, _, err := tpm2.CreatePrimary(dev, tpm2.HandleOwner, tpm2.PCRSelection{}, "", "", srkTemplate)
-	if err != nil {
-		return nil, fmt.Errorf("can't create primary key: %v", err)
-	}
-	defer tpm2.FlushContext(dev, srkHandle)
-
-	// tpm2_load -Q -C "$TMP"/primary.context -u "$TMP"/jwk.pub -r "$TMP"/jwk.priv -c "$TMP"/objectHandle.context
-	jwkPrivBlob, err := base64.RawURLEncoding.DecodeString(p.JwkPriv)
-	if err != nil {
-		return nil, err
-	}
-	jwkPrivBlob = jwkPrivBlob[2:] // this is marshalled TPM2B_PRIVATE structure, cut 2 bytes from the beginning to get the data
-
-	jwkPubBlob, err := base64.RawURLEncoding.DecodeString(p.JwkPub)
-	if err != nil {
-		return nil, err
-	}
-	jwkPubBlob = jwkPubBlob[2:] // this is marshalled TPM2B_PUBLIC structure, cut 2 bytes from the beginning to get the data
-
-	objectHandle, _, err := tpm2.Load(dev, srkHandle, "", jwkPubBlob, jwkPrivBlob)
-	if err != nil {
-		return nil, fmt.Errorf("unable to load data: %v", err)
-	}
-	defer tpm2.FlushContext(dev, objectHandle)
-
-	var unsealed []byte
-
-	pcrs, err := parsePcrIds(p.PcrIds)
-	if err != nil {
-		return nil, err
-	}
-	if len(pcrs) == 0 {
-		unsealed, err = tpm2.Unseal(dev, objectHandle, "")
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		pcrAlgo := getAlgorithm(p.PcrBank)
-		if pcrAlgo.IsNull() {
-			return nil, fmt.Errorf("unknown hash algo for pcr: %v", p.PcrBank)
-		}
-
-		sessHandle, _, err := policyPCRSession(dev, pcrs, pcrAlgo, nil)
-		if err != nil {
-			return nil, err
-		}
-		defer tpm2.FlushContext(dev, sessHandle)
-
-		// Unseal the data
-		// tpm2_unseal -c "$TMP"/objectHandle.context -p pcr:sha1:0,1
-		unsealed, err = tpm2.UnsealWithSession(dev, sessHandle, objectHandle, "")
-		if err != nil {
-			return nil, fmt.Errorf("unable to unseal data: %v", err)
-		}
-	}
-
-	key, err := jwk.ParseKey(unsealed)
-	if err != nil {
-		return nil, err
-	}
-	symmKey, ok := key.(jwk.SymmetricKey)
-	if !ok {
-		return nil, fmt.Errorf("unsealed key expected to be a symmetric key")
-	}
-
-	return symmKey.Octets(), nil
-}
-
-// Tpm2Config represents the data tpm2 needs to perform encryption
-type Tpm2Config struct {
+// tpm2Encrypter represents the data tpm2 needs to perform encryption
+type tpm2Encrypter struct {
 	Hash      string      `json:"hash,omitempty"`       // Hash algorithm used in the computation of the object name (default: sha256)
 	Key       string      `json:"key,omitempty"`        // Algorithm type for the generated key (default: ecc)
 	PcrBank   string      `json:"pcr_bank,omitempty"`   // PCR algorithm bank to use for policy (default: sha1)
@@ -182,31 +44,23 @@ type Tpm2Config struct {
 	PcrDigest string      `json:"pcr_digest,omitempty"` // Binary PCR hashes encoded in base64. If not present, the hash values are looked up
 }
 
-// NewTpm2Config parses the given json-format tpm2 config into a Tpm2Config
-func NewTpm2Config(config string) (Tpm2Config, error) {
-	var c Tpm2Config
+func parseTpm2EncrypterConfig(config string) (encrypter, error) {
+	var c tpm2Encrypter
 	if err := json.Unmarshal([]byte(config), &c); err != nil {
-		return c, err
+		return nil, err
 	}
+
 	var err error
 	c.PcrIds, err = parsePcrIds(c.PcrIds) // normalize pcrs array
 	if err != nil {
-		return Tpm2Config{}, err
+		return nil, err
 	}
+
 	return c, nil
 }
 
-// EncryptTpm2 encrypts a bytestream according to the json-format tpm2 config
-func EncryptTpm2(data []byte, config string) ([]byte, error) {
-	c, err := NewTpm2Config(config)
-	if err != nil {
-		return nil, err
-	}
-	return c.encrypt(data)
-}
-
-// encrypt a bytestream according to the Tpm2Config
-func (c Tpm2Config) encrypt(data []byte) ([]byte, error) {
+// encrypt a bytestream according to the tpm2Encrypter
+func (c tpm2Encrypter) encrypt(data []byte) ([]byte, error) {
 	dev, err := openTPM()
 	if err != nil {
 		return nil, err
@@ -323,9 +177,10 @@ func (c Tpm2Config) encrypt(data []byte) ([]byte, error) {
 	if err := hdrs.Set(jwe.ContentEncryptionKey, jwa.A256GCM); err != nil {
 		return nil, err
 	}
-	h := Pin{
-		Pin: "tpm2",
-		Tpm2: &Tpm2Pin{
+
+	clevis := map[string]interface{}{
+		"pin": "tpm2",
+		"tpm2": tpm2Decrypter{
 			Key:     c.Key,
 			Hash:    c.Hash,
 			JwkPub:  base64.RawURLEncoding.EncodeToString(publicArea),
@@ -334,11 +189,150 @@ func (c Tpm2Config) encrypt(data []byte) ([]byte, error) {
 			PcrBank: c.PcrBank,
 		},
 	}
-	if err := hdrs.Set("clevis", h); err != nil {
+	m, err := json.Marshal(clevis)
+	if err != nil {
+		return nil, err
+	}
+	if err := hdrs.Set("clevis", json.RawMessage(m)); err != nil {
 		return nil, err
 	}
 
 	return jwe.Encrypt(data, jwa.DIRECT, key, jwa.A256GCM, jwa.NoCompress, jwe.WithProtectedHeaders(hdrs))
+}
+
+var useSWEmulatorPort = -1
+
+func openTPM() (io.ReadWriteCloser, error) {
+	if useSWEmulatorPort != -1 {
+		dev, err := net.Dial("tcp", fmt.Sprintf(":%d", useSWEmulatorPort))
+		if err != nil {
+			return nil, err
+		}
+
+		if _, err := tpm2.GetManufacturer(dev); err != nil {
+			return nil, fmt.Errorf("open tcp port %d: device is not a TPM 2.0", useSWEmulatorPort)
+		}
+		return dev, nil
+	}
+	return tpm2.OpenTPM("/dev/tpmrm0")
+}
+
+// tpm2Decrypter represents the data tpm2 needs to perform decryption
+type tpm2Decrypter struct {
+	Hash    string      `json:"hash,omitempty"`
+	Key     string      `json:"key,omitempty"`
+	JwkPub  string      `json:"jwk_pub,omitempty"`
+	JwkPriv string      `json:"jwk_priv,omitempty"`
+	PcrBank string      `json:"pcr_bank,omitempty"`
+	PcrIds  interface{} `json:"pcr_ids,omitempty"`
+}
+
+func parseTpm2DecrypterConfig(config []byte) (decrypter, error) {
+	var d tpm2Decrypter
+	if err := json.Unmarshal(config, &d); err != nil {
+		return nil, err
+	}
+	return d, nil
+}
+
+func (p tpm2Decrypter) recoverKey(_ *jwe.Message) ([]byte, error) {
+	dev, err := openTPM()
+	if err != nil {
+		return nil, err
+	}
+	defer dev.Close()
+
+	_, err = tpm2.GetManufacturer(dev)
+	if err != nil {
+		return nil, fmt.Errorf("open %s: device is not a TPM 2.0", dev)
+	}
+
+	// tpm2_createprimary -Q -C "$auth" -g "$hash" -G "$key" -c "$TMP"/primary.context
+	hashAlgo := getAlgorithm(p.Hash)
+	if hashAlgo.IsNull() {
+		return nil, fmt.Errorf("unknown hash algo %v", p.Hash)
+	}
+
+	keyAlgo := getAlgorithm(p.Key)
+	if keyAlgo.IsNull() {
+		return nil, fmt.Errorf("unknown key algo %v", p.Key)
+	}
+
+	srkTemplate := tpm2.Public{
+		Type:          keyAlgo,
+		NameAlg:       hashAlgo,
+		Attributes:    tpm2.FlagStorageDefault,
+		AuthPolicy:    nil,
+		ECCParameters: defaultECCParams,
+		RSAParameters: defaultRSAParams,
+	}
+
+	srkHandle, _, err := tpm2.CreatePrimary(dev, tpm2.HandleOwner, tpm2.PCRSelection{}, "", "", srkTemplate)
+	if err != nil {
+		return nil, fmt.Errorf("can't create primary key: %v", err)
+	}
+	defer tpm2.FlushContext(dev, srkHandle)
+
+	// tpm2_load -Q -C "$TMP"/primary.context -u "$TMP"/jwk.pub -r "$TMP"/jwk.priv -c "$TMP"/objectHandle.context
+	jwkPrivBlob, err := base64.RawURLEncoding.DecodeString(p.JwkPriv)
+	if err != nil {
+		return nil, err
+	}
+	jwkPrivBlob = jwkPrivBlob[2:] // this is marshalled TPM2B_PRIVATE structure, cut 2 bytes from the beginning to get the data
+
+	jwkPubBlob, err := base64.RawURLEncoding.DecodeString(p.JwkPub)
+	if err != nil {
+		return nil, err
+	}
+	jwkPubBlob = jwkPubBlob[2:] // this is marshalled TPM2B_PUBLIC structure, cut 2 bytes from the beginning to get the data
+
+	objectHandle, _, err := tpm2.Load(dev, srkHandle, "", jwkPubBlob, jwkPrivBlob)
+	if err != nil {
+		return nil, fmt.Errorf("unable to load data: %v", err)
+	}
+	defer tpm2.FlushContext(dev, objectHandle)
+
+	var unsealed []byte
+
+	pcrs, err := parsePcrIds(p.PcrIds)
+	if err != nil {
+		return nil, err
+	}
+	if len(pcrs) == 0 {
+		unsealed, err = tpm2.Unseal(dev, objectHandle, "")
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		pcrAlgo := getAlgorithm(p.PcrBank)
+		if pcrAlgo.IsNull() {
+			return nil, fmt.Errorf("unknown hash algo for pcr: %v", p.PcrBank)
+		}
+
+		sessHandle, _, err := policyPCRSession(dev, pcrs, pcrAlgo, nil)
+		if err != nil {
+			return nil, err
+		}
+		defer tpm2.FlushContext(dev, sessHandle)
+
+		// Unseal the data
+		// tpm2_unseal -c "$TMP"/objectHandle.context -p pcr:sha1:0,1
+		unsealed, err = tpm2.UnsealWithSession(dev, sessHandle, objectHandle, "")
+		if err != nil {
+			return nil, fmt.Errorf("unable to unseal data: %v", err)
+		}
+	}
+
+	key, err := jwk.ParseKey(unsealed)
+	if err != nil {
+		return nil, err
+	}
+	symmKey, ok := key.(jwk.SymmetricKey)
+	if !ok {
+		return nil, fmt.Errorf("unsealed key expected to be a symmetric key")
+	}
+
+	return symmKey.Octets(), nil
 }
 
 // Returns session handle and policy digest.

@@ -1,8 +1,9 @@
 package clevis
 
 import (
-	"github.com/stretchr/testify/require"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestDivRoundUp(t *testing.T) {

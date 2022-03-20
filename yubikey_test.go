@@ -49,7 +49,7 @@ func TestEncryptYubikey(t *testing.T) {
 	}
 
 	for _, c := range clevisConfigs {
-		encrypted, err := EncryptYubikey([]byte(inputText), c)
+		encrypted, err := Encrypt([]byte(inputText), "yubikey", c)
 		require.NoError(t, err)
 
 		decrypted1, err := Decrypt(encrypted)
@@ -64,30 +64,5 @@ func TestEncryptYubikey(t *testing.T) {
 		require.NoError(t, cmd.Run())
 		decrypted2 := outbuf.Bytes()
 		require.Equal(t, inputText, string(decrypted2), "decrypt failed")
-	}
-}
-
-func TestYubikeyToConfig(t *testing.T) {
-	var tests = []struct {
-		pin      YubikeyPin
-		expected YubikeyConfig
-	}{{
-		pin:      YubikeyPin{},
-		expected: YubikeyConfig{},
-	}, {
-		pin: YubikeyPin{
-			Type:      "type",
-			Challenge: "challenge",
-			Slot:      42,
-		},
-		expected: YubikeyConfig{
-			Slot: 42,
-		},
-	}}
-
-	for _, test := range tests {
-		c, err := test.pin.toConfig()
-		require.NoError(t, err)
-		require.Equal(t, test.expected, c)
 	}
 }

@@ -100,7 +100,7 @@ func checkEncryption(t *testing.T, tpmPathEnvvar string) {
 
 	for _, c := range clevisConfigs {
 		// decrypt compact form using our implementation
-		encrypted, err := EncryptTpm2([]byte(inputText), c)
+		encrypted, err := Encrypt([]byte(inputText), "tpm2", c)
 		require.NoError(t, err)
 
 		decrypted, err := Decrypt(encrypted)
@@ -214,39 +214,6 @@ func (s *TpmEmulator) TctiEnvvar() string {
 	return fmt.Sprintf(`TPM2TOOLS_TCTI=swtpm:host=localhost,port=%d`, s.port)
 }
 
-func TestTpm2ToConfig(t *testing.T) {
-	var tests = []struct {
-		pin      Tpm2Pin
-		expected Tpm2Config
-	}{{
-		pin:      Tpm2Pin{},
-		expected: Tpm2Config{},
-	}, {
-		pin: Tpm2Pin{
-			Hash:    "hash",
-			Key:     "key",
-			JwkPub:  "jwkpun",
-			JwkPriv: "jwkpriv",
-			PcrBank: "pcrbank",
-			PcrIds:  "pcrids",
-		},
-
-		expected: Tpm2Config{
-			Hash:    "hash",
-			Key:     "key",
-			PcrBank: "pcrbank",
-			PcrIds:  "pcrids",
-		},
-	}}
-
-	for _, test := range tests {
-		c, err := test.pin.toConfig()
-
-		require.NoError(t, err)
-		require.Equal(t, test.expected, c)
-	}
-}
-
 func TestParseConfig(t *testing.T) {
 	configs := []struct {
 		in   string
@@ -263,7 +230,8 @@ func TestParseConfig(t *testing.T) {
 	}
 
 	for _, data := range configs {
-		c, err := NewTpm2Config(data.in)
+		e, err := parseTpm2EncrypterConfig(data.in)
+		c := e.(tpm2Encrypter)
 		require.NoError(t, err)
 		require.Equal(t, data.pcrs, c.PcrIds)
 	}

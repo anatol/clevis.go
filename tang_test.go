@@ -5,7 +5,6 @@ import (
 	"crypto"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -145,7 +144,7 @@ func checkEncryptTang(t *testing.T, h crypto.Hash) {
 	require.NoError(t, err)
 
 	// decrypt this text using our implementation
-	encrypted, err := EncryptTang([]byte(inputText), config)
+	encrypted, err := Encrypt([]byte(inputText), "tang", config)
 	require.NoError(t, err)
 
 	decrypted, err := Decrypt(encrypted)
@@ -165,32 +164,6 @@ func checkEncryptTang(t *testing.T, h crypto.Hash) {
 
 func TestEncryptTangSHA256(t *testing.T) {
 	checkEncryptTang(t, crypto.SHA256)
-}
-
-func TestTangToConfig(t *testing.T) {
-	var tests = []struct {
-		pin      TangPin
-		expected TangConfig
-	}{{
-		pin:      TangPin{},
-		expected: TangConfig{},
-	}, {
-		pin: TangPin{
-			Advertisement: json.RawMessage(`{"keys":[{"alg":"ECMR","crv":"P-521","key_ops":["deriveKey"],"kty":"EC","x":"AEFldixpd6xWI1rPigk_i_fW_9SLXh3q3h_CbmRIJ2vmnneWnfylvg37q9_BeSxhLpTQkq580tP-7QiOoNem4ubg","y":"AD8MroFIWQI4nm1rVKOb0ImO0Y7EzPt1HTQfZxagv2IoMez8H_vV7Ra9fU7lJhoe3v-Th6x3-4540FodeIxxiphn"},{"alg":"ES512","crv":"P-521","key_ops":["verify"],"kty":"EC","x":"AFZApUzXzvjVJCZQX1De3LUudI7fiWZcZS3t4F2yrxn0tItCYIZrfygPiCZfV1hVKa3WuH2YMrISZUPrSgi_RN2d","y":"ASEyw-_9xcwNBnvpT7thmAF5qHv9-UPYf38AC7y5QBVejQH_DO1xpKzlTbrHCz0jrMeEir8TyW5ywZIYnqGzPBpn"}]}`),
-			URL:           "http://192.168.4.100:7500",
-		},
-		expected: TangConfig{
-			Thumbprint: "qV4G6dFF-aHWLGyAlphlZ09VVjtA7Rz5EdUSPOaaIcA",
-			URL:        "http://192.168.4.100:7500",
-		},
-	}}
-
-	for _, test := range tests {
-		c, err := test.pin.toConfig()
-
-		require.NoError(t, err)
-		require.Equal(t, test.expected, c)
-	}
 }
 
 func hexString(s string) []byte {
