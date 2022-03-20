@@ -271,16 +271,12 @@ func (c TangConfig) encrypt(data []byte) ([]byte, error) {
 	if err := hdrs.Set(jwe.KeyIDKey, kid); err != nil {
 		return nil, err
 	}
-	advertBytes, err := json.Marshal(keys)
-	if err != nil {
-		return nil, err
-	}
-	advert := json.RawMessage(advertBytes)
+
 	header := Pin{
 		Pin: "tang",
 		Tang: &TangPin{
 			URL:           c.URL,
-			Advertisement: advert,
+			Advertisement: msg.Payload(),
 		},
 	}
 	if err := hdrs.Set("clevis", header); err != nil {

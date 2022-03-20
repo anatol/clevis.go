@@ -367,16 +367,12 @@ func (c RemoteConfig) encrypt(data []byte) ([]byte, error) {
 	if err := hdrs.Set(jwe.KeyIDKey, kid); err != nil {
 		return nil, err
 	}
-	advertBytes, err := json.Marshal(keys)
-	if err != nil {
-		return nil, err
-	}
-	advert := json.RawMessage(advertBytes)
+
 	header := Pin{
 		Pin: "remote",
 		Remote: &RemotePin{
 			Port:          c.Port,
-			Advertisement: advert,
+			Advertisement: msg.Payload(),
 		},
 	}
 	if err := hdrs.Set("clevis", header); err != nil {
