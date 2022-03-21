@@ -416,9 +416,20 @@ func filterKeys(set jwk.Set, op jwk.KeyOperation) []jwk.Key {
 }
 
 func keysIntersect(a, b []jwk.Key) bool {
+	const algo = crypto.SHA256
+
 	for _, i := range a {
+		t1, err := i.Thumbprint(algo)
+		if err != nil {
+			return false
+		}
 		for _, j := range b {
-			if i.KeyID() == j.KeyID() { // TODO: is it proper way to compare keys?
+			t2, err := j.Thumbprint(algo)
+			if err != nil {
+				return false
+			}
+			// compare keys thumbprints as a workaround for https://github.com/lestrrat-go/jwx/issues/539
+			if bytes.Equal(t1, t2) {
 				return true
 			}
 		}
