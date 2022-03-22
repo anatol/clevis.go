@@ -10,7 +10,26 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func yubikeyPresents() bool {
+	out, err := exec.Command("lsusb").CombinedOutput()
+	if err != nil {
+		return false
+	}
+
+	for _, l := range strings.Split(string(out), "\n") {
+		if strings.Contains(l, "Yubikey") {
+			return true
+		}
+	}
+
+	return false
+}
+
 func TestDecryptYubikey(t *testing.T) {
+	if !yubikeyPresents() {
+		t.Skip("no yubikey found")
+	}
+
 	inputText := "testing yubikey"
 
 	clevisConfigs := []string{
@@ -42,6 +61,10 @@ func TestDecryptYubikey(t *testing.T) {
 }
 
 func TestEncryptYubikey(t *testing.T) {
+	if !yubikeyPresents() {
+		t.Skip("no yubikey found")
+	}
+
 	inputText := "testing yubikey"
 
 	clevisConfigs := []string{
