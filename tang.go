@@ -15,6 +15,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/lestrrat-go/jwx/jwa"
 	"github.com/lestrrat-go/jwx/jwe"
@@ -53,7 +54,11 @@ func (c tangEncrypter) encrypt(data []byte) ([]byte, error) {
 
 	if c.Advertisement == nil {
 		// no advertisement provided, fetch one from the server
-		resp, err := http.Get(c.URL + "/adv/" + c.Thumbprint)
+		url := c.URL + "/adv/" + c.Thumbprint
+		if !strings.Contains(url, "://") {
+			url = "http://" + url
+		}
+		resp, err := http.Get(url)
 		if err != nil {
 			return nil, err
 		}
@@ -187,7 +192,11 @@ func (p tangDecrypter) recoverKey(msg *jwe.Message) ([]byte, error) {
 	}
 
 	exchangeWithTang := func(serverKeyID string, _ jwk.Set, reqData []byte) ([]byte, error) {
-		resp, err := http.Post(p.URL+"/rec/"+serverKeyID, "application/jwk+json", bytes.NewReader(reqData))
+		url := p.URL + "/rec/" + serverKeyID
+		if !strings.Contains(url, "://") {
+			url = "http://" + url
+		}
+		resp, err := http.Post(url, "application/jwk+json", bytes.NewReader(reqData))
 		if err != nil {
 			return nil, err
 		}
