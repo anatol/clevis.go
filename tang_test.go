@@ -79,15 +79,19 @@ func (s *tangServer) thumbprint(h crypto.Hash) (string, error) {
 	return thpOut.String(), nil
 }
 
-func (s *tangServer) TangConfig(h crypto.Hash, hostname string) (string, error) {
-	thp, err := s.thumbprint(h)
-	if err != nil {
-		return "", err
+func (s *tangServer) TangConfig(h crypto.Hash, hostname string, withThumbprint bool) (string, error) {
+	if withThumbprint {
+		thp, err := s.thumbprint(h)
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf(`{"url":"%s:%d", "thp":"%s"}`, hostname, s.Port, thp), nil
 	}
-	return fmt.Sprintf(`{"url":"%s:%d", "thp":"%s"}`, hostname, s.Port, thp), nil
+
+	return fmt.Sprintf(`{"url":"%s:%d"}`, hostname, s.Port), nil
 }
 
-func checkDecryptTang(t *testing.T, h crypto.Hash, hostname string) {
+func checkDecryptTang(t *testing.T, h crypto.Hash, configHostname string, withConfigThumbprint bool) {
 	// start Tang server
 	s, err := newTangServer(t.TempDir())
 	require.NoError(t, err)
@@ -97,9 +101,9 @@ func checkDecryptTang(t *testing.T, h crypto.Hash, hostname string) {
 
 	// encrypt a text using 'clevis-encrypt-tang' like this:
 	// clevis-encrypt-tang '{"url":"http://localhost", "thp":"1GDW0VlDv95DwPIm5EOqZVZCMeo"}' <<< "hello"
-	config, err := s.TangConfig(h, hostname)
+	config, err := s.TangConfig(h, configHostname, withConfigThumbprint)
 	require.NoError(t, err)
-	encryptCmd := exec.Command("clevis-encrypt-tang", config)
+	encryptCmd := exec.Command("clevis-encrypt-tang", config, "-y")
 	encryptCmd.Stdin = strings.NewReader(inputText)
 	var encryptedData bytes.Buffer
 	encryptCmd.Stdout = &encryptedData
@@ -123,22 +127,26 @@ func checkDecryptTang(t *testing.T, h crypto.Hash, hostname string) {
 }
 
 func TestDecryptTangSHA1(t *testing.T) {
-	checkDecryptTang(t, crypto.SHA1, "http://localhost")
+	checkDecryptTang(t, crypto.SHA1, "http://localhost", true)
 }
 
 func TestDecryptTangSHA256(t *testing.T) {
-	checkDecryptTang(t, crypto.SHA256, "http://localhost")
+	checkDecryptTang(t, crypto.SHA256, "http://localhost", true)
 }
 
 func TestDecryptURLWithoutScheme(t *testing.T) {
-	checkDecryptTang(t, crypto.SHA256, "localhost")
+	checkDecryptTang(t, crypto.SHA256, "localhost", true)
 }
 
 func TestDecryptIP(t *testing.T) {
-	checkDecryptTang(t, crypto.SHA256, "127.0.0.1")
+	checkDecryptTang(t, crypto.SHA256, "127.0.0.1", true)
 }
 
-func checkEncryptTang(t *testing.T, h crypto.Hash, hostname string) {
+func TestDecryptTangNoThumbprint(t *testing.T) {
+	checkDecryptTang(t, crypto.SHA256, "127.0.0.1", false)
+}
+
+func checkEncryptTang(t *testing.T, h crypto.Hash, configHostname string, withConfigThumbprint bool) {
 	// start Tang server
 	s, err := newTangServer(t.TempDir())
 	require.NoError(t, err)
@@ -148,7 +156,7 @@ func checkEncryptTang(t *testing.T, h crypto.Hash, hostname string) {
 
 	// encrypt a text using 'clevis-encrypt-tang' like this:
 	// clevis-encrypt-tang '{"url":"http://localhost", "thp":"1GDW0VlDv95DwPIm5EOqZVZCMeo"}' <<< "hello"
-	config, err := s.TangConfig(h, hostname)
+	config, err := s.TangConfig(h, configHostname, withConfigThumbprint)
 	require.NoError(t, err)
 
 	// decrypt this text using our implementation
@@ -171,15 +179,19 @@ func checkEncryptTang(t *testing.T, h crypto.Hash, hostname string) {
 }
 
 func TestEncryptTangSHA256(t *testing.T) {
-	checkEncryptTang(t, crypto.SHA256, "http://localhost")
+	checkEncryptTang(t, crypto.SHA256, "http://localhost", true)
 }
 
 func TestEncryptURLWithoutScheme(t *testing.T) {
-	checkEncryptTang(t, crypto.SHA256, "localhost")
+	checkEncryptTang(t, crypto.SHA256, "localhost", true)
 }
 
 func TestEncryptIP(t *testing.T) {
-	checkEncryptTang(t, crypto.SHA256, "127.0.0.1")
+	checkEncryptTang(t, crypto.SHA256, "127.0.0.1", true)
+}
+
+func TestEncryptTangNoThumbprint(t *testing.T) {
+	checkEncryptTang(t, crypto.SHA256, "http://localhost", false)
 }
 
 func hexString(s string) []byte {

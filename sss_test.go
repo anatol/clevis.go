@@ -31,7 +31,7 @@ func TestDecryptSss(t *testing.T) {
 	// clevis-encrypt-sss '{"t":1, "pins": {"tang": [{"url":"router.lan:8888"},{"url":"router.lan:8888"}]}}' <<< "test"
 	var tangConfigs [num]string
 	for i, s := range servers {
-		config, err := s.TangConfig(crypto.SHA256, "http://localhost")
+		config, err := s.TangConfig(crypto.SHA256, "http://localhost", true)
 		require.NoError(t, err)
 		tangConfigs[i] = config
 	}
@@ -78,7 +78,7 @@ func TestEncryptSss(t *testing.T) {
 	// clevis-encrypt-sss '{"t":1, "pins": {"tang": [{"url":"router.lan:8888"},{"url":"router.lan:8888"}]}}' <<< "test"
 	var tangConfigs [num]string
 	for i, s := range servers {
-		config, err := s.TangConfig(crypto.SHA256, "http://localhost")
+		config, err := s.TangConfig(crypto.SHA256, "http://localhost", true)
 		require.NoError(t, err)
 		tangConfigs[i] = config
 	}
