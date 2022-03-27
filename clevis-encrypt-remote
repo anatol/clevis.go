@@ -39,7 +39,7 @@ if [ -t 0 ]; then
     echo
     echo "This command uses the following configuration properties:"
     echo
-    echo "  port: <number>  TCP port to listent incoming requests from Tang"
+    echo "  port: <number>  TCP port to listen incoming requests from Tang"
     echo
     echo "  thp: <string>   The thumbprint of a trusted signing key"
     echo
