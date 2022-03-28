@@ -14,8 +14,6 @@ import (
 var ver = C.CString("0.1")
 
 type clevisToken struct {
-	Type     string
-	Keyslots []json.Number
 	Jwe      json.RawMessage
 }
 
