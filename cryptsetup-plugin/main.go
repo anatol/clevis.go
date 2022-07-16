@@ -5,16 +5,18 @@ package main
 // #include <errno.h>
 // #include <libcryptsetup.h>
 import "C"
+
 import (
 	"encoding/json"
 	"fmt"
+
 	"github.com/anatol/clevis.go"
 )
 
 var ver = C.CString("0.1")
 
 type clevisToken struct {
-	Jwe      json.RawMessage
+	Jwe json.RawMessage
 }
 
 //export cryptsetup_token_version

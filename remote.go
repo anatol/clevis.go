@@ -15,8 +15,10 @@ import (
 	"github.com/lestrrat-go/jwx/jws"
 )
 
-const remoteDefaultPort = 8609
-const defaultThpAlgo = crypto.SHA256
+const (
+	remoteDefaultPort = 8609
+	defaultThpAlgo    = crypto.SHA256
+)
 
 // remoteEncrypter represents the data needed to perform remote tang-based encryption
 type remoteEncrypter struct {
