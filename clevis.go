@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/lestrrat-go/jwx/jwa"
-	"github.com/lestrrat-go/jwx/jwe"
+	"github.com/lestrrat-go/jwx/v3/jwa"
+	"github.com/lestrrat-go/jwx/v3/jwe"
 )
 
 func init() {
@@ -59,8 +59,8 @@ func Decrypt(input []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	n, ok := msg.ProtectedHeaders().Get("clevis")
-	if !ok {
+	var n json.RawMessage
+	if err := msg.ProtectedHeaders().Get("clevis", &n); err != nil {
 		return nil, fmt.Errorf("provided message does not contain 'clevis' node")
 	}
 
@@ -68,7 +68,7 @@ func Decrypt(input []byte) ([]byte, error) {
 		Pin string `json:"pin"`
 	}
 
-	if err := json.Unmarshal(n.(json.RawMessage), &node); err != nil {
+	if err := json.Unmarshal(n, &node); err != nil {
 		return nil, err
 	}
 	pin := node.Pin
@@ -76,12 +76,12 @@ func Decrypt(input []byte) ([]byte, error) {
 		return nil, fmt.Errorf("clevis node does not contain 'pin' property")
 	}
 	var pins map[string]json.RawMessage
-	if err := json.Unmarshal(n.(json.RawMessage), &pins); err != nil {
+	if err := json.Unmarshal(n, &pins); err != nil {
 		return nil, err
 	}
 
 	config, ok := pins[pin]
-	if pin == "" {
+	if !ok || pin == "" {
 		return nil, fmt.Errorf("clevis node does not contain property %s", pin)
 	}
 
@@ -95,7 +95,7 @@ func Decrypt(input []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	if err := msg.Recipients()[0].Headers().Set(jwe.AlgorithmKey, jwa.DIRECT); err != nil {
+	if err := msg.Recipients()[0].Headers().Set(jwe.AlgorithmKey, jwa.DIRECT()); err != nil {
 		return nil, err
 	}
 	// msg.Decrypt() is deprecated by jwx library. Once it is fully removed - replace it with
@@ -103,7 +103,7 @@ func Decrypt(input []byte) ([]byte, error) {
 	// func recoverClevisKey(ctx jwe.DecryptCtx) error {
 	//	return ctx.Message().Recipients()[0].Headers().Set(jwe.AlgorithmKey, jwa.DIRECT)
 	//}
-	return msg.Decrypt(jwa.DIRECT, key)
+	return jwe.Decrypt(input, jwe.WithKey(jwa.DIRECT(), key))
 }
 
 func parseDecrypterConfig(pin string, config []byte) (decrypter, error) {

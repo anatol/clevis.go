@@ -13,8 +13,8 @@ import (
 	"os/exec"
 	"strconv"
 
-	"github.com/lestrrat-go/jwx/jwa"
-	"github.com/lestrrat-go/jwx/jwe"
+	"github.com/lestrrat-go/jwx/v3/jwa"
+	"github.com/lestrrat-go/jwx/v3/jwe"
 	"golang.org/x/crypto/pbkdf2"
 )
 
@@ -89,7 +89,7 @@ func (c yubikeyEncrypter) encrypt(data []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	return jwe.Encrypt(data, jwa.DIRECT, key, jwa.A256GCM, jwa.NoCompress, jwe.WithProtectedHeaders(hdrs))
+	return jwe.Encrypt(data, jwe.WithKey(jwa.DIRECT(), key), jwe.WithContentEncryption(jwa.A256GCM()), jwe.WithCompress(jwa.NoCompress()), jwe.WithProtectedHeaders(hdrs))
 }
 
 // yubikeyDecrypter represents the data yubikey needs to perform decryption

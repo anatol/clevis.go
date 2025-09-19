@@ -2,7 +2,6 @@ package clevis
 
 import (
 	"bytes"
-	"context"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/rand"
@@ -17,10 +16,10 @@ import (
 	"os"
 	"strings"
 
-	"github.com/lestrrat-go/jwx/jwa"
-	"github.com/lestrrat-go/jwx/jwe"
-	"github.com/lestrrat-go/jwx/jwk"
-	"github.com/lestrrat-go/jwx/jws"
+	"github.com/lestrrat-go/jwx/v3/jwa"
+	"github.com/lestrrat-go/jwx/v3/jwe"
+	"github.com/lestrrat-go/jwx/v3/jwk"
+	"github.com/lestrrat-go/jwx/v3/jws"
 )
 
 // tangEncrypter represents the data needed to perform tang-based encryption
@@ -106,7 +105,17 @@ func encryptWithTangProtocol(data []byte, msgContent []byte, msg *jws.Message, t
 	}
 
 	for _, key := range verifyKeys {
-		if _, err = jws.Verify(msgContent, jwa.SignatureAlgorithm(key.Algorithm()), key); err != nil {
+		keyalg, ok := key.Algorithm()
+		if !ok {
+			return nil, fmt.Errorf("key does not have an algorithm")
+		}
+
+		alg, ok := keyalg.(jwa.SignatureAlgorithm)
+		if !ok {
+			return nil, fmt.Errorf("key algorithm %s is not a signature algorithm", keyalg)
+		}
+
+		if _, err = jws.Verify(msgContent, jws.WithKey(alg, key)); err != nil {
 			return nil, err
 		}
 	}
@@ -137,7 +146,8 @@ func encryptWithTangProtocol(data []byte, msgContent []byte, msg *jws.Message, t
 	if err := exchangeKey.Set(jwk.KeyOpsKey, jwk.KeyOperationList{}); err != nil {
 		return nil, err
 	}
-	if err := exchangeKey.Set(jwk.AlgorithmKey, ""); err != nil {
+
+	if err := exchangeKey.Remove(jwk.AlgorithmKey); err != nil {
 		return nil, err
 	}
 
@@ -148,10 +158,10 @@ func encryptWithTangProtocol(data []byte, msgContent []byte, msg *jws.Message, t
 	kid := base64.RawURLEncoding.EncodeToString(thp)
 
 	hdrs := jwe.NewHeaders()
-	if err := hdrs.Set(jwe.AlgorithmKey, jwa.ECDH_ES); err != nil {
+	if err := hdrs.Set(jwe.AlgorithmKey, jwa.ECDH_ES()); err != nil {
 		return nil, err
 	}
-	if err := hdrs.Set(jwe.ContentEncryptionKey, jwa.A256GCM); err != nil {
+	if err := hdrs.Set(jwe.ContentEncryptionKey, jwa.A256GCM()); err != nil {
 		return nil, err
 	}
 	if err := hdrs.Set(jwe.KeyIDKey, kid); err != nil {
@@ -166,7 +176,7 @@ func encryptWithTangProtocol(data []byte, msgContent []byte, msg *jws.Message, t
 		return nil, err
 	}
 
-	return jwe.Encrypt(data, jwa.ECDH_ES, exchangeKey, jwa.A256GCM, jwa.NoCompress, jwe.WithProtectedHeaders(hdrs))
+	return jwe.Encrypt(data, jwe.WithKey(jwa.ECDH_ES(), exchangeKey), jwe.WithContentEncryption(jwa.A256GCM()), jwe.WithCompress(jwa.NoCompress()), jwe.WithProtectedHeaders(hdrs))
 }
 
 // tangDecrypter represents the data tang needs to perform decryption
@@ -217,15 +227,21 @@ func recoverKeyWithTangProtocol(msg *jwe.Message, adv json.RawMessage, exchangeF
 	}
 
 	headers := msg.ProtectedHeaders()
-	e := headers.EphemeralPublicKey()
-	serverKeyID := headers.KeyID()
+	e, ok := headers.EphemeralPublicKey()
+	if !ok {
+		return nil, fmt.Errorf("provided message does not contain 'epk'")
+	}
+	serverKeyID, ok := headers.KeyID()
+	if !ok {
+		return nil, fmt.Errorf("provided message does not contain 'kid'")
+	}
 
 	// JWX does not implement ECMR (used by clevis/jose tool).
 	// So we perform ECMR exchange ourselves, construct the EC public key as described here https://github.com/latchset/tang#recovery
 	// and then use it as a new ephemeral key in ECDS.
 	// Then we reconstruct EC key using concat kdf.
 	var epk ecdsa.PublicKey
-	if err := e.Raw(&epk); err != nil {
+	if err := jwk.Export(e, &epk); err != nil {
 		return nil, err
 	}
 	webKey, err := findByThumbprintInSet(advertizedKeys, serverKeyID)
@@ -233,7 +249,7 @@ func recoverKeyWithTangProtocol(msg *jwe.Message, adv json.RawMessage, exchangeF
 		return nil, err
 	}
 	var serverKey ecdsa.PublicKey
-	if err := webKey.Raw(&serverKey); err != nil {
+	if err := jwk.Export(webKey, &serverKey); err != nil {
 		return nil, err
 	}
 
@@ -251,7 +267,7 @@ func recoverKeyWithTangProtocol(msg *jwe.Message, adv json.RawMessage, exchangeF
 	x, y := ecCurve.Add(tempKey.X, tempKey.Y, epk.X, epk.Y)
 	xfrKey := &ecdsa.PublicKey{Curve: ecCurve, X: x, Y: y}
 
-	reqKey, err := jwk.New(xfrKey)
+	reqKey, err := jwk.Import(xfrKey)
 	if err != nil {
 		return nil, err
 	}
@@ -284,7 +300,11 @@ func recoverKeyWithTangProtocol(msg *jwe.Message, adv json.RawMessage, exchangeF
 
 	receivedKey := &ecdsa.PublicKey{Curve: ecCurve, X: x, Y: y}
 
-	keysize, err := keySize(headers.ContentEncryption())
+	cealg, ok := headers.ContentEncryption()
+	if !ok {
+		return nil, fmt.Errorf("provided message does not contain 'enc' header")
+	}
+	keysize, err := keySize(cealg)
 	if err != nil {
 		return nil, err
 	}
@@ -295,10 +315,13 @@ func recoverKeyWithTangProtocol(msg *jwe.Message, adv json.RawMessage, exchangeF
 	pubinfo := make([]byte, 4)
 	binary.BigEndian.PutUint32(pubinfo, uint32(keysize*8))
 
+	apu, _ := headers.AgreementPartyUInfo()
+	apv, _ := headers.AgreementPartyVInfo()
+
 	var data []byte
-	data = append(data, ndata([]byte(headers.ContentEncryption().String()))...)
-	data = append(data, ndata(headers.AgreementPartyUInfo())...)
-	data = append(data, ndata(headers.AgreementPartyVInfo())...)
+	data = append(data, ndata([]byte(cealg.String()))...)
+	data = append(data, ndata(apu)...)
+	data = append(data, ndata(apv)...)
 	data = append(data, pubinfo...)
 
 	return concatKDF(sha256.New(), zBytes, data, keysize), nil
@@ -321,17 +344,17 @@ func concatKDF(hash hash.Hash, z, s1 []byte, kdLen int) []byte {
 
 func keySize(alg jwa.ContentEncryptionAlgorithm) (int, error) {
 	switch alg {
-	case jwa.A128GCM:
+	case jwa.A128GCM():
 		return 16, nil
-	case jwa.A192GCM:
+	case jwa.A192GCM():
 		return 24, nil
-	case jwa.A256GCM:
+	case jwa.A256GCM():
 		return 32, nil
-	case jwa.A128CBC_HS256:
+	case jwa.A128CBC_HS256():
 		return 16, nil
-	case jwa.A192CBC_HS384:
+	case jwa.A192CBC_HS384():
 		return 24, nil
-	case jwa.A256CBC_HS512:
+	case jwa.A256CBC_HS512():
 		return 32, nil
 	default:
 		return 0, fmt.Errorf("failed to determine key size for content cipher: invalid algorithm (%s)", alg)
@@ -387,10 +410,12 @@ func findByThumbprintInSet(keys jwk.Set, thumbprint string) (jwk.Key, error) {
 		if l != len(thpBytes) {
 			continue
 		}
-		for iter := keys.Iterate(context.TODO()); iter.Next(context.TODO()); {
-			pair := iter.Pair()
-			key := pair.Value.(jwk.Key)
 
+		for i := range keys.Len() {
+			key, ok := keys.Key(i)
+			if !ok {
+				return nil, fmt.Errorf("failed to get key at index %d", i)
+			}
 			thp, err := key.Thumbprint(h)
 			if err != nil {
 				return nil, err
@@ -405,16 +430,20 @@ func findByThumbprintInSet(keys jwk.Set, thumbprint string) (jwk.Key, error) {
 }
 
 func filterKeys(set jwk.Set, op jwk.KeyOperation) []jwk.Key {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
 	var keys []jwk.Key
 
-	for iter := set.Iterate(ctx); iter.Next(ctx); {
-		pair := iter.Pair()
-		key := pair.Value.(jwk.Key)
+	for i := range set.Len() {
+		key, ok := set.Key(i)
+		if !ok {
+			continue
+		}
 
-		for _, o := range key.KeyOps() {
+		ops, ok := key.KeyOps()
+		if !ok {
+			continue
+		}
+
+		for _, o := range ops {
 			if o == op {
 				keys = append(keys, key)
 			}
