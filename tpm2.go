@@ -14,9 +14,9 @@ import (
 
 	"github.com/google/go-tpm/legacy/tpm2"
 	"github.com/google/go-tpm/tpmutil"
-	"github.com/lestrrat-go/jwx/jwa"
-	"github.com/lestrrat-go/jwx/jwe"
-	"github.com/lestrrat-go/jwx/jwk"
+	"github.com/lestrrat-go/jwx/v3/jwa"
+	"github.com/lestrrat-go/jwx/v3/jwe"
+	"github.com/lestrrat-go/jwx/v3/jwk"
 )
 
 var defaultSymScheme = &tpm2.SymScheme{
@@ -107,14 +107,14 @@ func (c tpm2Encrypter) encrypt(data []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	encKey, err := jwk.New(key)
+	encKey, err := jwk.Import(key)
 	if err != nil {
 		return nil, err
 	}
-	if err := encKey.Set(jwk.AlgorithmKey, jwa.A256GCM); err != nil {
+	if err := encKey.Set(jwk.AlgorithmKey, jwa.A256GCM()); err != nil {
 		return nil, err
 	}
-	if err := encKey.Set(jwk.KeyTypeKey, jwa.OctetSeq); err != nil {
+	if err := encKey.Set(jwk.KeyTypeKey, jwa.OctetSeq()); err != nil {
 		return nil, err
 	}
 	if err := encKey.Set(jwk.KeyOpsKey, jwk.KeyOperationList{jwk.KeyOpEncrypt, jwk.KeyOpDecrypt}); err != nil {
@@ -171,10 +171,10 @@ func (c tpm2Encrypter) encrypt(data []byte) ([]byte, error) {
 	publicArea = append(buff, publicArea...)
 
 	hdrs := jwe.NewHeaders()
-	if err := hdrs.Set(jwe.AlgorithmKey, jwa.DIRECT); err != nil {
+	if err := hdrs.Set(jwe.AlgorithmKey, jwa.DIRECT()); err != nil {
 		return nil, err
 	}
-	if err := hdrs.Set(jwe.ContentEncryptionKey, jwa.A256GCM); err != nil {
+	if err := hdrs.Set(jwe.ContentEncryptionKey, jwa.A256GCM()); err != nil {
 		return nil, err
 	}
 
@@ -197,7 +197,7 @@ func (c tpm2Encrypter) encrypt(data []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	return jwe.Encrypt(data, jwa.DIRECT, key, jwa.A256GCM, jwa.NoCompress, jwe.WithProtectedHeaders(hdrs))
+	return jwe.Encrypt(data, jwe.WithKey(jwa.DIRECT(), key), jwe.WithContentEncryption(jwa.A256GCM()), jwe.WithCompress(jwa.NoCompress()), jwe.WithProtectedHeaders(hdrs))
 }
 
 var useSWEmulatorPort = -1
@@ -332,7 +332,11 @@ func (p tpm2Decrypter) recoverKey(_ *jwe.Message) ([]byte, error) {
 		return nil, fmt.Errorf("unsealed key expected to be a symmetric key")
 	}
 
-	return symmKey.Octets(), nil
+	oct, ok := symmKey.Octets()
+	if !ok {
+		return nil, fmt.Errorf("could not obtain octets from symmetric key")
+	}
+	return oct, nil
 }
 
 // Returns session handle and policy digest.

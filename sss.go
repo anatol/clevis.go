@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"math/big"
 
-	"github.com/lestrrat-go/jwx/jwa"
-	"github.com/lestrrat-go/jwx/jwe"
+	"github.com/lestrrat-go/jwx/v3/jwa"
+	"github.com/lestrrat-go/jwx/v3/jwe"
 )
 
 // sssEncrypter represents the data samir secret sharing needs to perform encryption
@@ -110,7 +110,7 @@ func (c sssEncrypter) encrypt(data []byte) ([]byte, error) {
 	}
 
 	encKey := extendBytes(coeff[0].Bytes(), primeLength) // we use 0-th coefficient as the encryption key
-	return jwe.Encrypt(data, jwa.DIRECT, encKey, jwa.A256GCM, jwa.NoCompress, jwe.WithProtectedHeaders(hdrs))
+	return jwe.Encrypt(data, jwe.WithKey(jwa.DIRECT(), encKey), jwe.WithContentEncryption(jwa.A256GCM()), jwe.WithCompress(jwa.NoCompress()), jwe.WithProtectedHeaders(hdrs))
 }
 
 // sssDecrypter represents the data samir secret sharing needs to perform decryption

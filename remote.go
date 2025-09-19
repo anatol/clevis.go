@@ -9,10 +9,10 @@ import (
 	"os"
 	"strconv"
 
-	"github.com/lestrrat-go/jwx/jwa"
-	"github.com/lestrrat-go/jwx/jwe"
-	"github.com/lestrrat-go/jwx/jwk"
-	"github.com/lestrrat-go/jwx/jws"
+	"github.com/lestrrat-go/jwx/v3/jwa"
+	"github.com/lestrrat-go/jwx/v3/jwe"
+	"github.com/lestrrat-go/jwx/v3/jwk"
+	"github.com/lestrrat-go/jwx/v3/jws"
 )
 
 const (
@@ -160,7 +160,16 @@ func verifyRemoteKeys(clientAdv []byte, storedAdvertizedKeys jwk.Set, serverKeyI
 	}
 
 	for _, key := range clientVerifyKeys {
-		if _, err := jws.Verify(clientAdv, jwa.SignatureAlgorithm(key.Algorithm()), key); err != nil {
+		keyalg, ok := key.Algorithm()
+		if !ok {
+			return fmt.Errorf("key does not have an algorithm")
+		}
+
+		alg, ok := keyalg.(jwa.SignatureAlgorithm)
+		if !ok {
+			return fmt.Errorf("algorithm %s is not a signature algorithm", keyalg)
+		}
+		if _, err := jws.Verify(clientAdv, jws.WithKey(alg, key)); err != nil {
 			return err
 		}
 	}
