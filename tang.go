@@ -22,6 +22,12 @@ import (
 	"github.com/lestrrat-go/jwx/v3/jws"
 )
 
+func init() {
+	if _, ok := jwa.LookupSignatureAlgorithm("ECMR"); !ok {
+		jwa.RegisterSignatureAlgorithm(jwa.NewSignatureAlgorithm("ECMR"))
+	}
+}
+
 // tangEncrypter represents the data needed to perform tang-based encryption
 type tangEncrypter struct {
 	// A trusted advertisement (config JSON or a filename containing JSON)
