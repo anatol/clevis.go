@@ -43,7 +43,12 @@ func main() {
 
 `clevis.Decrypt` takes the decrypted text and produces (unbinds) the original data.
 
+## Downstream Projects
+
+ - [clevis-yubikey](https://code.launchpad.net/~lowjoel/+git/clevis-yubikey) available as an Ubuntu PPA, supporting Yubikeys with Clevis and initramfs-tools.
+
 ## Thanks
+
 This project has been started as a part of Twitter HackWeek. Thank you Twitter and thank you [Ian Brown](https://twitter.com/igb)
 for supporting open-source development.
 
