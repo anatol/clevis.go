@@ -48,6 +48,18 @@ slot=$(jose fmt -j- -Og clevis -g yubikey -g slot -Io- <<< "$jhd")
 
 challenge=$(jose fmt -j- -Og clevis -g yubikey -g challenge -u- <<< "$jhd" | jose b64 dec -i - | xxd -p -c 1000)
 ykchalresp_all_yubikeys() {
+    # This code only uses checks for a Yubikey's existence to determine if we should re-attempt challenge-response
+    # with another Yubikey.
+    #
+    # The rationale for not checking for existence first is because that is inherently a race. Take for example:
+    #
+    # 1. Yubikey 0 and Yubikey 1 plugged in.
+    # 2. Loop is at i=1
+    # 3. yubikeyExists(1) => true
+    # 4. User unplugs Yubikey 1
+    # 5. challengeResponseOneYubikey(1, ...) => error
+    #
+    # It is less racy if we only use existence to check if we should try the next one.
     local i=0
     for ((i=0; ; i++)); do
         if echo -n "$challenge" | ykchalresp "-n$i" -x "-$slot" -i-; then

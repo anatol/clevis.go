@@ -134,16 +134,10 @@ func (d yubikeyDecrypter) challengeResponse() ([]byte, error) {
 		return nil, fmt.Errorf("expected challenge length is 32")
 	}
 
-	var outBuffer, errBuffer bytes.Buffer
-	cmd := exec.Command("ykchalresp", "-i-", "-"+strconv.Itoa(d.Slot))
-	cmd.Stdin = bytes.NewReader(challengeBin)
-	cmd.Stdout = &outBuffer
-	cmd.Stderr = &errBuffer
-	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("%v: %s", err, errBuffer.String())
+	response, err := challengeResponseAllYubikeys(d.Slot, challengeBin)
+	if err != nil {
+		return nil, err
 	}
-	// out is hex
-	response := outBuffer.Bytes()[:40] // cut the trailing newline
 	responseBin := make([]byte, 20)
 	if _, err := hex.Decode(responseBin, response); err != nil {
 		return nil, err
@@ -172,6 +166,49 @@ func (d yubikeyDecrypter) challengeResponse() ([]byte, error) {
 	}
 
 	return key, nil
+}
+
+func challengeResponseAllYubikeys(slot int, challenge []byte) ([]byte, error) {
+	// This code only uses yubikeyExists() to determine if we should re-attempt challenge-response with another
+	// Yubikey.
+	//
+	// The rationale for not checking for existence first is because that is inherently a race. Take for example:
+	//
+	// 1. Yubikey 0 and Yubikey 1 plugged in.
+	// 2. Loop is at i=1
+	// 3. yubikeyExists(1) => true
+	// 4. User unplugs Yubikey 1
+	// 5. challengeResponseOneYubikey(1, ...) => error
+	//
+	// It is less racy if we only use existence to check if we should try the next one.
+	for i := 0; ; i++ {
+		if res, err := challengeResponseOneYubikey(i, slot, challenge); err == nil || !yubikeyExists(i) {
+			return res, err
+		}
+	}
+}
+
+func challengeResponseOneYubikey(index, slot int, challenge []byte) ([]byte, error) {
+	var outBuffer, errBuffer bytes.Buffer
+	cmd := exec.Command("ykchalresp", "-n"+strconv.Itoa(index), "-i-", "-"+strconv.Itoa(slot))
+	cmd.Stdin = bytes.NewReader(challenge)
+	cmd.Stdout = &outBuffer
+	cmd.Stderr = &errBuffer
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("%w: %s", err, errBuffer.String())
+	}
+	// out is hex
+	response := outBuffer.Bytes()[:40] // cut the trailing newline
+	return response, nil
+}
+
+func yubikeyExists(index int) bool {
+	var outBuffer bytes.Buffer
+	cmd := exec.Command("ykinfo", "-n"+strconv.Itoa(index), "-a")
+	cmd.Stdout = &outBuffer
+	cmd.Stderr = &outBuffer
+	err := cmd.Run()
+	return err == nil
 }
 
 func hashByName(name string) func() hash.Hash {
