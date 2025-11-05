@@ -47,7 +47,19 @@ fi
 slot=$(jose fmt -j- -Og clevis -g yubikey -g slot -Io- <<< "$jhd")
 
 challenge=$(jose fmt -j- -Og clevis -g yubikey -g challenge -u- <<< "$jhd" | jose b64 dec -i - | xxd -p -c 1000)
-response=$(echo -n $challenge | ykchalresp -x -i- -$slot)
+ykchalresp_all_yubikeys() {
+    local i=0
+    for ((i=0; ; i++)); do
+        if echo -n "$challenge" | ykchalresp "-n$i" -x "-$slot" -i-; then
+            return
+        fi
+        if ! ykinfo "-n$i" -a >/dev/null 2>&1; then
+            break # no such YubiKey
+        fi
+        echo "challenge failed; attempting next YubiKey" >&2
+    done
+}
+response="$(ykchalresp_all_yubikeys)"
 
 # nettle-pbkdf2 used below hardcodes pbkdf2 with sha256
 kdf_type=$(jose fmt -j- -Og clevis -g yubikey -g kdf -g type -u- <<< "$jhd")
