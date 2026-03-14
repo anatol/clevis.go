@@ -37,11 +37,11 @@ var defaultECCParams = &tpm2.ECCParams{
 
 // tpm2Encrypter represents the data tpm2 needs to perform encryption
 type tpm2Encrypter struct {
-	Hash      string      `json:"hash,omitempty"`       // Hash algorithm used in the computation of the object name (default: sha256)
-	Key       string      `json:"key,omitempty"`        // Algorithm type for the generated key (default: ecc)
-	PcrBank   string      `json:"pcr_bank,omitempty"`   // PCR algorithm bank to use for policy (default: sha1)
-	PcrIds    interface{} `json:"pcr_ids,omitempty"`    // PCR list used for policy. If not present, no policy is used
-	PcrDigest string      `json:"pcr_digest,omitempty"` // Binary PCR hashes encoded in base64. If not present, the hash values are looked up
+	Hash      string `json:"hash,omitempty"`       // Hash algorithm used in the computation of the object name (default: sha256)
+	Key       string `json:"key,omitempty"`        // Algorithm type for the generated key (default: ecc)
+	PcrBank   string `json:"pcr_bank,omitempty"`   // PCR algorithm bank to use for policy (default: sha1)
+	PcrIds    any    `json:"pcr_ids,omitempty"`    // PCR list used for policy. If not present, no policy is used
+	PcrDigest string `json:"pcr_digest,omitempty"` // Binary PCR hashes encoded in base64. If not present, the hash values are looked up
 }
 
 func parseTpm2EncrypterConfig(config string) (encrypter, error) {
@@ -178,7 +178,7 @@ func (c tpm2Encrypter) encrypt(data []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	clevis := map[string]interface{}{
+	clevis := map[string]any{
 		"pin": "tpm2",
 		"tpm2": tpm2Decrypter{
 			Key:     c.Key,
@@ -219,12 +219,12 @@ func openTPM() (io.ReadWriteCloser, error) {
 
 // tpm2Decrypter represents the data tpm2 needs to perform decryption
 type tpm2Decrypter struct {
-	Hash    string      `json:"hash,omitempty"`
-	Key     string      `json:"key,omitempty"`
-	JwkPub  string      `json:"jwk_pub,omitempty"`
-	JwkPriv string      `json:"jwk_priv,omitempty"`
-	PcrBank string      `json:"pcr_bank,omitempty"`
-	PcrIds  interface{} `json:"pcr_ids,omitempty"`
+	Hash    string `json:"hash,omitempty"`
+	Key     string `json:"key,omitempty"`
+	JwkPub  string `json:"jwk_pub,omitempty"`
+	JwkPriv string `json:"jwk_priv,omitempty"`
+	PcrBank string `json:"pcr_bank,omitempty"`
+	PcrIds  any    `json:"pcr_ids,omitempty"`
 }
 
 func parseTpm2DecrypterConfig(config []byte) (decrypter, error) {
@@ -385,7 +385,7 @@ func policyPCRSession(dev io.ReadWriteCloser, pcrs []int, algo tpm2.Algorithm, e
 	return sessHandle, policy, nil
 }
 
-func parsePcrIds(pcrList interface{}) ([]int, error) {
+func parsePcrIds(pcrList any) ([]int, error) {
 	switch pcrList := pcrList.(type) {
 	case nil:
 		return nil, nil
@@ -404,7 +404,7 @@ func parsePcrIds(pcrList interface{}) ([]int, error) {
 		return pcrIds, nil
 	case []int:
 		return pcrList, nil
-	case []interface{}:
+	case []any:
 		res := make([]int, len(pcrList))
 		for i, v := range pcrList {
 			switch v := v.(type) {

@@ -91,7 +91,7 @@ func (c sssEncrypter) encrypt(data []byte) ([]byte, error) {
 
 	primeEncoded := base64.RawURLEncoding.EncodeToString(p.Bytes())
 
-	clevis := map[string]interface{}{
+	clevis := map[string]any{
 		"pin": "sss",
 		"sss": sssDecrypter{
 			Threshold: c.Threshold,
@@ -206,10 +206,10 @@ func lagrangeInterpolation(prime *big.Int, points []point) *big.Int {
 	num := len(points)
 	result := big.NewInt(0)
 
-	for j := 0; j < num; j++ {
+	for j := range num {
 		basis := big.NewInt(1) // value of Lagrange basis polynomial in point x=0
 
-		for m := 0; m < num; m++ {
+		for m := range num {
 			if m == j {
 				continue
 			}

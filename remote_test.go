@@ -38,14 +38,12 @@ func TestRemotePin(t *testing.T) {
 	require.NoError(t, encryptCmd.Run())
 
 	wg := sync.WaitGroup{}
-	wg.Add(1)
-	go func() {
+	wg.Go(func() {
 		// decrypt this text using our implementation
 		plaintext, err := Decrypt(encryptedData.Bytes())
 		require.NoError(t, err)
 		require.Equal(t, inputText, string(plaintext), "decryption failed")
-		wg.Done()
-	}()
+	})
 
 	time.Sleep(time.Second) // wait till .Decrypt() starts TCP server
 	require.NoError(t, tang.ReverseTangHandshake(":16798", ks))

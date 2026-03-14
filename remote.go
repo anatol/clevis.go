@@ -65,7 +65,7 @@ func (c remoteEncrypter) encrypt(data []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	clevis := map[string]interface{}{
+	clevis := map[string]any{
 		"pin": "remote",
 		"remote": remoteDecrypter{
 			Port:          c.Port,

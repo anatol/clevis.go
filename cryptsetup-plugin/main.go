@@ -6,6 +6,11 @@ package main
 // #include <libcryptsetup.h>
 import "C"
 
+// CGO disables use of `-Wl,--version-script=...` compile flag (see https://go.dev/s/invalidflag)
+// build this library with
+//      export CGO_LDFLAGS_ALLOW='-Wl,--version-script=cryptsetup_token.map'
+//      go build
+
 import (
 	"encoding/json"
 	"fmt"

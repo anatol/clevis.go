@@ -86,7 +86,7 @@ func (c tangEncrypter) encrypt(data []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	clevis := map[string]interface{}{
+	clevis := map[string]any{
 		"pin": "tang",
 		"tang": tangDecrypter{
 			URL:           c.URL,
@@ -99,7 +99,7 @@ func (c tangEncrypter) encrypt(data []byte) ([]byte, error) {
 
 // Both Tang and Remote (aka reverse-Tang) protocols share a lot of common functionality.
 // encryptWithTangProtocol is a common part of these protocols encryption
-func encryptWithTangProtocol(data []byte, msgContent []byte, msg *jws.Message, thumbprint string, clevis map[string]interface{}) ([]byte, error) {
+func encryptWithTangProtocol(data []byte, msgContent []byte, msg *jws.Message, thumbprint string, clevis map[string]any) ([]byte, error) {
 	keys, err := jwk.Parse(msg.Payload())
 	if err != nil {
 		return nil, err

@@ -67,7 +67,7 @@ func (c yubikeyEncrypter) encrypt(data []byte) ([]byte, error) {
 
 	hdrs := jwe.NewHeaders()
 
-	clevis := map[string]interface{}{
+	clevis := map[string]any{
 		"pin": "yubikey",
 		"yubikey": yubikeyDecrypter{
 			Slot:      c.Slot,
