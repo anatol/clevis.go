@@ -25,7 +25,6 @@ type decrypter interface {
 }
 
 func parseEncrypterConfig(pin, config string) (encrypter, error) {
-	// TODO: turn parseXXXEncrypterConfig into a type parametrized function once 1.18 becomes more widespread
 	switch pin {
 	case "tang":
 		return parseTangEncrypterConfig(config)
@@ -116,7 +115,6 @@ func Decrypt(input []byte) ([]byte, error) {
 }
 
 func parseDecrypterConfig(pin string, config []byte) (decrypter, error) {
-	// TODO: turn parseXXXEncrypterConfig into a type parametrized function once 1.18 becomes more widespread
 	switch pin {
 	case "tang":
 		return parseTangDecrypterConfig(config)
