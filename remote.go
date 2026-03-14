@@ -107,10 +107,9 @@ func (p remoteDecrypter) recoverKey(msg *jwe.Message) ([]byte, error) {
 				return nil, err
 			}
 
-			// TODO: add concurrent break here and process each client with a goroutine to avoid blocking each other
 			resp, err := handleRemoteRequest(conn, advertizedKeys, serverKeyID, reqData)
 			if err != nil {
-				fmt.Println(err)
+				// Client failed validation or protocol error; try next connection.
 				continue
 			}
 
