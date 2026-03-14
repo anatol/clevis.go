@@ -231,8 +231,9 @@ func TestParseConfig(t *testing.T) {
 
 	for _, data := range configs {
 		e, err := parseTpm2EncrypterConfig(data.in)
-		c := e.(tpm2Encrypter)
 		require.NoError(t, err)
+		c, ok := e.(tpm2Encrypter)
+		require.True(t, ok, "expected tpm2Encrypter type")
 		require.Equal(t, data.pcrs, c.PcrIds)
 	}
 }
