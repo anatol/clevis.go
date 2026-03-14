@@ -78,8 +78,8 @@ func (c sssEncrypter) encrypt(data []byte) ([]byte, error) {
 			y.Mod(y, p)
 
 			point := make([]byte, 2*primeLength)
-			copy(point, extendBytes(x.Bytes(), primeLength))
-			copy(point[primeLength:], extendBytes(y.Bytes(), primeLength))
+			copy(point, expandBuffer(x.Bytes(), primeLength))
+			copy(point[primeLength:], expandBuffer(y.Bytes(), primeLength))
 
 			secret, err := Encrypt(point, name, string(pinCfg))
 			if err != nil {
@@ -109,7 +109,7 @@ func (c sssEncrypter) encrypt(data []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	encKey := extendBytes(coeff[0].Bytes(), primeLength) // we use 0-th coefficient as the encryption key
+	encKey := expandBuffer(coeff[0].Bytes(), primeLength) // we use 0-th coefficient as the encryption key
 	return jwe.Encrypt(data, jwe.WithKey(jwa.DIRECT(), encKey), jwe.WithContentEncryption(jwa.A256GCM()), jwe.WithCompress(jwa.NoCompress()), jwe.WithProtectedHeaders(hdrs))
 }
 
@@ -174,18 +174,6 @@ func (p sssDecrypter) recoverKey(_ *jwe.Message) ([]byte, error) {
 	cek = expandBuffer(cek, pointLength)
 
 	return cek, nil
-}
-
-func extendBytes(bytes []byte, length int) []byte {
-	inputLen := len(bytes)
-	if inputLen == length {
-		return bytes
-	}
-	if inputLen > length {
-		panic("received array length is larger than requested")
-	}
-	padding := make([]byte, length-inputLen)
-	return append(padding, bytes...)
 }
 
 type point struct {

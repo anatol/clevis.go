@@ -5,13 +5,15 @@ import (
 	"math/big"
 )
 
+// expandBuffer prepends zero bytes so that len(result) == finalLength.
+// If buffer is already the right length or longer, it is returned as-is.
 func expandBuffer(buffer []byte, finalLength int) []byte {
-	if len(buffer) < finalLength {
-		newBuffer := make([]byte, finalLength-len(buffer), finalLength)
-		newBuffer = append(newBuffer, buffer...)
-		return newBuffer
+	if len(buffer) >= finalLength {
+		return buffer
 	}
-	return buffer
+	newBuffer := make([]byte, finalLength)
+	copy(newBuffer[finalLength-len(buffer):], buffer)
+	return newBuffer
 }
 
 // divRoundUp divides num to divisor with rounding up the result to the next integer value
