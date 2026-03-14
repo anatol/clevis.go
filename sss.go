@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/big"
 
@@ -145,11 +146,12 @@ func (p sssDecrypter) recoverKey(_ *jwe.Message) ([]byte, error) {
 		return nil, fmt.Errorf("number of points %v is smaller than threshold %v", len(p.Jwe), p.Threshold)
 	}
 
+	var decryptErrors []error
 	points := make([]point, 0, p.Threshold)
 	for i, j := range p.Jwe {
 		pointData, err := Decrypt([]byte(j))
 		if err != nil {
-			fmt.Println(err)
+			decryptErrors = append(decryptErrors, fmt.Errorf("share #%d: %w", i, err))
 			continue
 		}
 		if len(pointData) != 2*pointLength {
@@ -165,6 +167,10 @@ func (p sssDecrypter) recoverKey(_ *jwe.Message) ([]byte, error) {
 			// alright, there is enough points to interpolate the polynomial
 			break
 		}
+	}
+
+	if len(points) < p.Threshold {
+		return nil, fmt.Errorf("could only decrypt %d of %d shares (need %d): %w", len(points), len(p.Jwe), p.Threshold, errors.Join(decryptErrors...))
 	}
 
 	cek := lagrangeInterpolation(&prime, points).Bytes()
