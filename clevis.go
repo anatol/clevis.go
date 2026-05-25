@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/lestrrat-go/jwx/v3/jwa"
 	"github.com/lestrrat-go/jwx/v3/jwe"
 )
 
@@ -89,29 +88,22 @@ func Decrypt(input []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	key, err := d.recoverKey(msg)
+	cek, err := d.recoverKey(msg)
 	if err != nil {
 		return nil, err
 	}
 
-	// The recovered key is already derived, so we use it as a _direct_ key
-	//
-	// However, the original message may have been encrypted with a different
-	// algorithm (e.g ECDH-ES). Since jwx complains if you try to decrypt
-	// a message with a direct key that was encrypted with ECDH-ES, we
-	// need to modify the message to use the direct key algorithm.
-	if err := msg.Recipients()[0].Headers().Set(jwe.AlgorithmKey, jwa.DIRECT()); err != nil {
-		return nil, err
+	// Extract the content-encryption algorithm from the protected header.
+	encAlg, ok := msg.ProtectedHeaders().ContentEncryption()
+	if !ok {
+		return nil, fmt.Errorf(`JWE protected header missing "enc" field`)
 	}
 
-	// Serialize the modified message and re-parse it
-	modifiedInput, err := json.Marshal(msg)
-	if err != nil {
-		return nil, err
-	}
-
-	// Now try decryption using the direct key on the modified input
-	return jwe.Decrypt(modifiedInput, jwe.WithKey(jwa.DIRECT(), key))
+	// Bypass jwx's alg-matching pass: clevis JWEs intentionally carry
+	// alg=ECDH-ES (protected) and alg=dir (per-recipient), which jwx v3.1+
+	// hard-rejects as an RFC 7516 §7.2.1 disjoint-headers violation. We
+	// have the CEK; do the AEAD decrypt directly.
+	return decryptAEADWithCEK(input, encAlg.String(), cek)
 }
 
 func parseDecrypterConfig(pin string, config []byte) (decrypter, error) {
