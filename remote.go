@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/lestrrat-go/jwx/v3/jwa"
 	"github.com/lestrrat-go/jwx/v3/jwe"
@@ -123,7 +124,7 @@ func handleRemoteRequest(conn net.Conn, storedAdvertizedKeys jwk.Set, serverKeyI
 	defer conn.Close()
 
 	buff := bufio.NewReader(conn)
-	clientAdv, _, err := buff.ReadLine()
+	clientAdv, err := readSingleLine(buff)
 	if err != nil {
 		return nil, err
 	}
@@ -137,8 +138,22 @@ func handleRemoteRequest(conn net.Conn, storedAdvertizedKeys jwk.Set, serverKeyI
 		return nil, err
 	}
 
-	respData, _, err := buff.ReadLine()
-	return respData, err
+	return readSingleLine(buff)
+}
+
+func readSingleLine(r *bufio.Reader) ([]byte, error) {
+	line, isPrefix, err := r.ReadLine()
+	if err != nil {
+		return nil, err
+	}
+	if isPrefix {
+		return nil, fmt.Errorf("line exceeds maximum allowed length")
+	}
+	line = []byte(strings.TrimSpace(string(line)))
+	if len(line) == 0 {
+		return nil, fmt.Errorf("empty line")
+	}
+	return line, nil
 }
 
 // the function checks that advertisement provided by the connected client is valid.
