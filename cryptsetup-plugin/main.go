@@ -3,6 +3,7 @@ package main
 // #cgo pkg-config: libcryptsetup
 // #cgo LDFLAGS: "-Wl,--version-script=cryptsetup_token.map"
 // #include <errno.h>
+// #include <stdlib.h>
 // #include <libcryptsetup.h>
 import "C"
 
@@ -14,11 +15,18 @@ import "C"
 import (
 	"encoding/json"
 	"fmt"
+	"unsafe"
 
 	"github.com/anatol/clevis.go"
 )
 
 var ver = C.CString("0.1")
+
+func cryptLog(dev *C.struct_crypt_device, level C.int, msg string) {
+	cmsg := C.CString(msg)
+	defer C.free(unsafe.Pointer(cmsg))
+	C.crypt_log(dev, level, cmsg)
+}
 
 type clevisToken struct {
 	Jwe json.RawMessage
@@ -40,19 +48,19 @@ func cryptsetup_token_open_pin(dev *C.struct_crypt_device, tokenID C.int, pin *C
 
 	cerr := C.crypt_token_json_get(dev, tokenID, &cjson)
 	if cerr < 0 {
-		C.crypt_log(dev, C.CRYPT_LOG_ERROR, C.CString(fmt.Sprintf("token get failed: errno %v\n", -cerr)))
+		cryptLog(dev, C.CRYPT_LOG_ERROR, fmt.Sprintf("token get failed: errno %v\n", -cerr))
 		return cerr
 	}
 
 	var node clevisToken
 	if err := json.Unmarshal([]byte(C.GoString(cjson)), &node); err != nil {
-		C.crypt_log(dev, C.CRYPT_LOG_ERROR, C.CString(fmt.Sprintf("token json unmarshal failed: %v\n", err)))
+		cryptLog(dev, C.CRYPT_LOG_ERROR, fmt.Sprintf("token json unmarshal failed: %v\n", err))
 		return -C.EINVAL
 	}
 
 	pwd, err := clevis.Decrypt(node.Jwe)
 	if err != nil {
-		C.crypt_log(dev, C.CRYPT_LOG_ERROR, C.CString(fmt.Sprintf("clevis decryption failed: %v\n", err)))
+		cryptLog(dev, C.CRYPT_LOG_ERROR, fmt.Sprintf("clevis decryption failed: %v\n", err))
 		return -C.EINVAL
 	}
 
@@ -66,7 +74,7 @@ func cryptsetup_token_open_pin(dev *C.struct_crypt_device, tokenID C.int, pin *C
 func cryptsetup_token_dump(cd *C.struct_crypt_device, cjson *C.char) {
 	var config clevisToken
 	if err := json.Unmarshal([]byte(C.GoString(cjson)), &config); err != nil {
-		C.crypt_log(cd, C.CRYPT_LOG_NORMAL, C.CString(fmt.Sprintf("\tInvalid JSON config:%v\n", err)))
+		cryptLog(cd, C.CRYPT_LOG_NORMAL, fmt.Sprintf("\tInvalid JSON config:%v\n", err))
 		return
 	}
 }
@@ -75,13 +83,13 @@ func cryptsetup_token_dump(cd *C.struct_crypt_device, cjson *C.char) {
 func cryptsetup_token_validate(cd *C.struct_crypt_device, cjson *C.char) C.int {
 	var config clevisToken
 	if err := json.Unmarshal([]byte(C.GoString(cjson)), &config); err != nil {
-		C.crypt_log(cd, C.CRYPT_LOG_NORMAL, C.CString(fmt.Sprintf("\tInvalid JSON config:%v\n", err)))
+		cryptLog(cd, C.CRYPT_LOG_NORMAL, fmt.Sprintf("\tInvalid JSON config:%v\n", err))
 		return -C.EINVAL
 	}
 
 	// TODO: do extra validation
 
-	C.crypt_log(cd, C.CRYPT_LOG_DEBUG, C.CString("Validated Clevis Token Config.\n"))
+	cryptLog(cd, C.CRYPT_LOG_DEBUG, "Validated Clevis Token Config.\n")
 
 	return 0
 }
