@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/lestrrat-go/jwx/v3/jwa"
 	"github.com/lestrrat-go/jwx/v3/jwe"
@@ -26,6 +27,10 @@ func init() {
 	if _, ok := jwa.LookupSignatureAlgorithm("ECMR"); !ok {
 		jwa.RegisterSignatureAlgorithm(jwa.NewSignatureAlgorithm("ECMR"))
 	}
+}
+
+var clevisHTTPClient = &http.Client{
+	Timeout: 15 * time.Second,
 }
 
 // tangEncrypter represents the data needed to perform tang-based encryption
@@ -63,9 +68,13 @@ func (c tangEncrypter) encrypt(data []byte) ([]byte, error) {
 		if !strings.Contains(url, "://") {
 			url = "http://" + url
 		}
-		resp, err := http.Get(url)
+		resp, err := clevisHTTPClient.Get(url)
 		if err != nil {
 			return nil, err
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("tang advertisement request failed: %s", resp.Status)
 		}
 		msgContent, err = io.ReadAll(resp.Body)
 		if err != nil {
@@ -212,11 +221,14 @@ func (p tangDecrypter) recoverKey(msg *jwe.Message) ([]byte, error) {
 		if !strings.Contains(url, "://") {
 			url = "http://" + url
 		}
-		resp, err := http.Post(url, "application/jwk+json", bytes.NewReader(reqData))
+		resp, err := clevisHTTPClient.Post(url, "application/jwk+json", bytes.NewReader(reqData))
 		if err != nil {
 			return nil, err
 		}
 		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("tang recovery request failed: %s", resp.Status)
+		}
 
 		return io.ReadAll(resp.Body)
 	}
