@@ -51,7 +51,11 @@ func (c yubikeyEncrypter) encrypt(data []byte) ([]byte, error) {
 		return nil, fmt.Errorf("%v: %s", err, errBuffer.String())
 	}
 	// out is hex
-	response := outBuffer.Bytes()[:40] // cut the trailing newline
+	responseBytes := bytes.TrimSpace(outBuffer.Bytes())
+	if len(responseBytes) != 40 {
+		return nil, fmt.Errorf("unexpected ykchalresp response length: got %d", len(responseBytes))
+	}
+	response := responseBytes[:40]
 	responseBin := make([]byte, 20)
 	if _, err := hex.Decode(responseBin, response); err != nil {
 		return nil, err
@@ -198,7 +202,11 @@ func challengeResponseOneYubikey(index, slot int, challenge []byte) ([]byte, err
 		return nil, fmt.Errorf("%w: %s", err, errBuffer.String())
 	}
 	// out is hex
-	response := outBuffer.Bytes()[:40] // cut the trailing newline
+	responseBytes := bytes.TrimSpace(outBuffer.Bytes())
+	if len(responseBytes) != 40 {
+		return nil, fmt.Errorf("unexpected ykchalresp response length: got %d", len(responseBytes))
+	}
+	response := responseBytes[:40]
 	return response, nil
 }
 
