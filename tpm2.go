@@ -278,11 +278,17 @@ func (p tpm2Decrypter) recoverKey(_ *jwe.Message) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	if len(jwkPrivBlob) < 2 {
+		return nil, fmt.Errorf("invalid tpm2 jwk_priv blob")
+	}
 	jwkPrivBlob = jwkPrivBlob[2:] // this is marshalled TPM2B_PRIVATE structure, cut 2 bytes from the beginning to get the data
 
 	jwkPubBlob, err := base64.RawURLEncoding.DecodeString(p.JwkPub)
 	if err != nil {
 		return nil, err
+	}
+	if len(jwkPubBlob) < 2 {
+		return nil, fmt.Errorf("invalid tpm2 jwk_pub blob")
 	}
 	jwkPubBlob = jwkPubBlob[2:] // this is marshalled TPM2B_PUBLIC structure, cut 2 bytes from the beginning to get the data
 
